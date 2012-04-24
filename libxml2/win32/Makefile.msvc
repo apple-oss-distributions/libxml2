@@ -40,14 +40,14 @@ UTILS_INTDIR = int.utils.msvc
 
 # The preprocessor and its options.
 CPP = cl.exe /EP
-CPPFLAGS = /nologo /I$(XML_SRCDIR)\include
+CPPFLAGS = /nologo /I$(XML_SRCDIR)\include /D "NOLIBTOOL" 
 !if "$(WITH_THREADS)" != "no"
 CPPFLAGS = $(CPPFLAGS) /D "_REENTRANT"
 !endif
 
 # The compiler and its options.
 CC = cl.exe
-CFLAGS = /nologo /D "WIN32" /D "_WINDOWS" /D "_MBCS" /W1 $(CRUNTIME)
+CFLAGS = /nologo /D "WIN32" /D "_WINDOWS" /D "_MBCS"  /D "NOLIBTOOL" /W1 /GS $(CRUNTIME)
 CFLAGS = $(CFLAGS) /I$(XML_SRCDIR) /I$(XML_SRCDIR)\include /I$(INCPREFIX)
 !if "$(WITH_THREADS)" != "no"
 CFLAGS = $(CFLAGS) /D "_REENTRANT"
@@ -62,12 +62,13 @@ CFLAGS = $(CFLAGS) /D "HAVE_PTHREAD_H"
 !if "$(WITH_ZLIB)" == "1"
 CFLAGS = $(CFLAGS) /D "HAVE_ZLIB_H"
 !endif
-CFLAGS = $(CFLAGS) /D_CRT_SECURE_NO_DEPRECATE /D_CRT_NONSTDC_NO_DEPRECATE
+CFLAGS = $(CFLAGS) /D_CRT_SECURE_NO_DEPRECATE /D_CRT_NONSTDC_NO_DEPRECATE /D_CRT_SECURE_CPP_OVERLOAD_STANDARD_NAMES
 
 # The linker and its options.
 LD = link.exe
 LDFLAGS = /nologo /VERSION:$(LIBXML_MAJOR_VERSION).$(LIBXML_MINOR_VERSION)
 LDFLAGS = $(LDFLAGS) /LIBPATH:$(BINDIR) /LIBPATH:$(LIBPREFIX)
+LDFLAGS = $(LDFLAGS) /NXCOMPAT /DYNAMICBASE /SAFESEH
 LIBS =
 !if "$(WITH_FTP)" == "1" || "$(WITH_HTTP)" == "1"
 LIBS = $(LIBS) wsock32.lib ws2_32.lib
@@ -80,10 +81,11 @@ LIBS = $(LIBS) iconv.lib
 !endif
 !endif 
 !if "$(WITH_ICU)" == "1"
+CFLAGS = $(CFLAGS) /DU_DISABLE_RENAMING=1
 !if "$(DEBUG)" == "1"
-LIBS = $(LIBS) icuuc_debug.lib
+LIBS = $(LIBS) libicuuc_debug.lib
 !else
-LIBS = $(LIBS) icuuc.lib
+LIBS = $(LIBS) libicuuc.lib
 !endif
 !endif
 !if "$(WITH_ZLIB)" == "1"
@@ -152,7 +154,8 @@ XML_OBJS = $(XML_INTDIR)\c14n.obj\
 	$(XML_INTDIR)\xmlwriter.obj\
 	$(XML_INTDIR)\xpath.obj\
 	$(XML_INTDIR)\xpointer.obj\
-	$(XML_INTDIR)\xmlstring.obj
+	$(XML_INTDIR)\xmlstring.obj\
+	$(XML_INTDIR)\version.res
 
 # Static libxml object files.
 XML_OBJS_A = $(XML_INTDIR_A)\c14n.obj\
@@ -356,6 +359,10 @@ $(XML_INTDIR_A_DLL) :
 # An implicit rule for static for dll libxml compilation.
 {$(XML_SRCDIR)}.c{$(XML_INTDIR_A_DLL)}.obj::
 	$(CC) $(CFLAGS) /D "LIBXML_STATIC" /D "LIBXML_STATIC_FOR_DLL" /Fo$(XML_INTDIR_A_DLL)\ /c $<
+
+# Compiles libxml resource files.
+{$(XML_SRCDIR)}.rc{$(XML_INTDIR)}.res:
+	rc.exe /i $(RINCLUDE) /fo $@ $<
 
 # Compiles libxml source. Uses the implicit rule for commands.
 $(XML_OBJS) : $(XML_INTDIR) 

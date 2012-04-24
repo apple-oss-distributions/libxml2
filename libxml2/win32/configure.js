@@ -125,7 +125,7 @@ function usage()
 	txt += "  xptr:       Enable XPointer support (" + (withXptr? "yes" : "no")  + ")\n";
 	txt += "  xinclude:   Enable XInclude support (" + (withXinclude? "yes" : "no")  + ")\n";
 	txt += "  iconv:      Enable iconv support (" + (withIconv? "yes" : "no")  + ")\n";
-	txt += "  icu:        Enable ICU support (" + (withIcu? "yes" : "no") + ")\n";
+	txt += "  icu:        Enable icu support (" + (withIcu? "yes" : "no")  + ")\n";
 	txt += "  iso8859x:   Enable ISO8859X support (" + (withIso8859x? "yes" : "no")  + ")\n";
 	txt += "  zlib:       Enable zlib support (" + (withZlib? "yes" : "no")  + ")\n";
 	txt += "  xml_debug:  Enable XML debbugging module (" + (withDebug? "yes" : "no")  + ")\n";
@@ -165,6 +165,7 @@ function usage()
 	txt += "              (" + buildSoPrefix + ")\n";
 	txt += "  include:    Additional search path for the compiler, particularily\n";
 	txt += "              where iconv headers can be found (" + buildInclude + ")\n";
+	txt += "  rinclude:   Additional search path for the resource compiler\n";
 	txt += "  lib:        Additional search path for the linker, particularily\n";
 	txt += "              where iconv library can be found (" + buildLib + ")\n";
 	WScript.Echo(txt);
@@ -276,6 +277,7 @@ function discoverVersion()
 		vf.WriteLine("LIB=" + buildLib);
 		vf.WriteLine("DYNRUNTIME=" + (dynruntime? "1" : "0"));
 	}
+	vf.WriteLine("RINCLUDE=" + resourceInclude);
 	vf.Close();
 }
 
@@ -535,6 +537,8 @@ for (i = 0; (i < WScript.Arguments.length) && (error == 0); i++) {
 			buildIncPrefix = arg.substring(opt.length + 1, arg.length);
 		else if (opt == "include")
 			buildInclude = arg.substring(opt.length + 1, arg.length);
+		else if (opt == "rinclude")
+			resourceInclude = arg.substring(opt.length + 1, arg.length);
 		else if (opt == "lib")
 			buildLib = arg.substring(opt.length + 1, arg.length);
 		else if (opt == "release")
@@ -618,7 +622,13 @@ if (compiler == "mingw")
 	makefile = ".\\Makefile.mingw";
 else if (compiler == "bcb")
 	makefile = ".\\Makefile.bcb";
-fso.CopyFile(makefile, ".\\Makefile", true);
+var new_makefile = ".\\Makefile";
+var f = fso.FileExists(new_makefile);
+if (f) {
+       var t = fso.GetFile(new_makefile);
+       t.Attributes =0;
+}
+fso.CopyFile(makefile, new_makefile, true);
 WScript.Echo("Created Makefile.");
 // Create the config.h.
 var confighsrc = "..\\include\\win32config.h";
@@ -647,7 +657,7 @@ txtOut += "     XPath support: " + boolToStr(withXpath) + "\n";
 txtOut += "  XPointer support: " + boolToStr(withXptr) + "\n";
 txtOut += "  XInclude support: " + boolToStr(withXinclude) + "\n";
 txtOut += "     iconv support: " + boolToStr(withIconv) + "\n";
-txtOut += "       icu support: " + boolToStr(withIcu) + "\n";
+txtOut += "     icu   support: " + boolToStr(withIcu) + "\n";
 txtOut += "  iso8859x support: " + boolToStr(withIso8859x) + "\n";
 txtOut += "      zlib support: " + boolToStr(withZlib) + "\n";
 txtOut += "  Debugging module: " + boolToStr(withDebug) + "\n";
@@ -685,6 +695,7 @@ txtOut += "    Put headers in: " + buildIncPrefix + "\n";
 txtOut += "Put static libs in: " + buildLibPrefix + "\n";
 txtOut += "Put shared libs in: " + buildSoPrefix + "\n";
 txtOut += "      Include path: " + buildInclude + "\n";
+txtOut += "     RInclude path: " + resourceInclude + "\n";
 txtOut += "          Lib path: " + buildLib + "\n";
 WScript.Echo(txtOut);
 
