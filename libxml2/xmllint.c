@@ -449,7 +449,7 @@ startTimer(void)
  *           message about the timing performed; format is a printf
  *           type argument
  */
-static void XMLCDECL
+static void XMLCDECL LIBXML_ATTR_FORMAT(1,2)
 endTimer(const char *fmt, ...)
 {
     long msec;
@@ -485,7 +485,7 @@ startTimer(void)
 {
     begin = clock();
 }
-static void XMLCDECL
+static void XMLCDECL LIBXML_ATTR_FORMAT(1,2)
 endTimer(const char *fmt, ...)
 {
     long msec;
@@ -514,7 +514,7 @@ startTimer(void)
      * Do nothing
      */
 }
-static void XMLCDECL
+static void XMLCDECL LIBXML_ATTR_FORMAT(1,2)
 endTimer(char *format, ...)
 {
     /*
@@ -634,7 +634,7 @@ xmlHTMLPrintFileContext(xmlParserInputPtr input) {
  * Display and format an error messages, gives file, line, position and
  * extra parameters.
  */
-static void XMLCDECL
+static void XMLCDECL LIBXML_ATTR_FORMAT(2,3)
 xmlHTMLError(void *ctx, const char *msg, ...)
 {
     xmlParserCtxtPtr ctxt = (xmlParserCtxtPtr) ctx;
@@ -671,7 +671,7 @@ xmlHTMLError(void *ctx, const char *msg, ...)
  * Display and format a warning messages, gives file, line, position and
  * extra parameters.
  */
-static void XMLCDECL
+static void XMLCDECL LIBXML_ATTR_FORMAT(2,3)
 xmlHTMLWarning(void *ctx, const char *msg, ...)
 {
     xmlParserCtxtPtr ctxt = (xmlParserCtxtPtr) ctx;
@@ -709,7 +709,7 @@ xmlHTMLWarning(void *ctx, const char *msg, ...)
  * Display and format an validity error messages, gives file,
  * line, position and extra parameters.
  */
-static void XMLCDECL
+static void XMLCDECL LIBXML_ATTR_FORMAT(2,3)
 xmlHTMLValidityError(void *ctx, const char *msg, ...)
 {
     xmlParserCtxtPtr ctxt = (xmlParserCtxtPtr) ctx;
@@ -746,7 +746,7 @@ xmlHTMLValidityError(void *ctx, const char *msg, ...)
  * Display and format a validity warning messages, gives file, line,
  * position and extra parameters.
  */
-static void XMLCDECL
+static void XMLCDECL LIBXML_ATTR_FORMAT(2,3)
 xmlHTMLValidityWarning(void *ctx, const char *msg, ...)
 {
     xmlParserCtxtPtr ctxt = (xmlParserCtxtPtr) ctx;
@@ -809,6 +809,7 @@ xmlShellReadline(char *prompt) {
 
     if (prompt != NULL)
 	fprintf(stdout, "%s", prompt);
+    fflush(stdout);
     if (!fgets(line_read, 500, stdin))
         return(NULL);
     line_read[500] = 0;
@@ -1410,7 +1411,7 @@ commentDebug(void *ctx ATTRIBUTE_UNUSED, const xmlChar *value)
  * Display and format a warning messages, gives file, line, position and
  * extra parameters.
  */
-static void XMLCDECL
+static void XMLCDECL LIBXML_ATTR_FORMAT(2,3)
 warningDebug(void *ctx ATTRIBUTE_UNUSED, const char *msg, ...)
 {
     va_list args;
@@ -1433,7 +1434,7 @@ warningDebug(void *ctx ATTRIBUTE_UNUSED, const char *msg, ...)
  * Display and format a error messages, gives file, line, position and
  * extra parameters.
  */
-static void XMLCDECL
+static void XMLCDECL LIBXML_ATTR_FORMAT(2,3)
 errorDebug(void *ctx ATTRIBUTE_UNUSED, const char *msg, ...)
 {
     va_list args;
@@ -1456,7 +1457,7 @@ errorDebug(void *ctx ATTRIBUTE_UNUSED, const char *msg, ...)
  * Display and format a fatalError messages, gives file, line, position and
  * extra parameters.
  */
-static void XMLCDECL
+static void XMLCDECL LIBXML_ATTR_FORMAT(2,3)
 fatalErrorDebug(void *ctx ATTRIBUTE_UNUSED, const char *msg, ...)
 {
     va_list args;
@@ -2001,6 +2002,12 @@ static void walkDoc(xmlDocPtr doc) {
     xmlNsPtr ns;
 
     root = xmlDocGetRootElement(doc);
+    if (root == NULL ) {
+        xmlGenericError(xmlGenericErrorContext,
+                "Document does not have a root element");
+        progresult = XMLLINT_ERR_UNCLASS;
+        return;
+    }
     for (ns = root->nsDef, i = 0;ns != NULL && i < 20;ns=ns->next) {
         namespaces[i++] = ns->href;
         namespaces[i++] = ns->prefix;
@@ -2206,13 +2213,15 @@ static void parseAndPrintFile(char *filename, xmlParserCtxtPtr rectxt) {
 
             res = fread(chars, 1, 4, f);
             if (res > 0) {
+                int ret = 0;
                 ctxt = htmlCreatePushParserCtxt(NULL, NULL,
                             chars, res, filename, XML_CHAR_ENCODING_NONE);
                 xmlCtxtUseOptions(ctxt, options);
-                while ((res = fread(chars, 1, pushsize, f)) > 0) {
-                    htmlParseChunk(ctxt, chars, res, 0);
+                while ((res = fread(chars, 1, pushsize, f)) > 0 && ret == 0) {
+                    ret = htmlParseChunk(ctxt, chars, res, 0);
                 }
-                htmlParseChunk(ctxt, chars, 0, 1);
+                if (ret == 0)
+                    htmlParseChunk(ctxt, chars, 0, 1);
                 doc = ctxt->myDoc;
                 htmlFreeParserCtxt(ctxt);
             }
@@ -2269,7 +2278,7 @@ static void parseAndPrintFile(char *filename, xmlParserCtxtPtr rectxt) {
 #endif
 	    }
 	    if (f != NULL) {
-		int ret;
+		int ret = 0;
 	        int res, size = 1024;
 	        char chars[1024];
                 xmlParserCtxtPtr ctxt;
@@ -2280,10 +2289,11 @@ static void parseAndPrintFile(char *filename, xmlParserCtxtPtr rectxt) {
 		    ctxt = xmlCreatePushParserCtxt(NULL, NULL,
 		                chars, res, filename);
 		    xmlCtxtUseOptions(ctxt, options);
-		    while ((res = fread(chars, 1, size, f)) > 0) {
-			xmlParseChunk(ctxt, chars, res, 0);
+		    while ((res = fread(chars, 1, size, f)) > 0 && ret == 0) {
+			ret = xmlParseChunk(ctxt, chars, res, 0);
 		    }
-		    xmlParseChunk(ctxt, chars, 0, 1);
+		    if (ret == 0)
+			xmlParseChunk(ctxt, chars, 0, 1);
 		    doc = ctxt->myDoc;
 		    ret = ctxt->wellFormed;
 		    xmlFreeParserCtxt(ctxt);
@@ -2967,6 +2977,7 @@ static void showVersion(const char *name) {
     if (xmlHasFeature(XML_WITH_XPTR)) fprintf(stderr, "XPointer ");
     if (xmlHasFeature(XML_WITH_XINCLUDE)) fprintf(stderr, "XInclude ");
     if (xmlHasFeature(XML_WITH_ICONV)) fprintf(stderr, "Iconv ");
+    if (xmlHasFeature(XML_WITH_ICU)) fprintf(stderr, "ICU ");
     if (xmlHasFeature(XML_WITH_ISO8859X)) fprintf(stderr, "ISO8859X ");
     if (xmlHasFeature(XML_WITH_UNICODE)) fprintf(stderr, "Unicode ");
     if (xmlHasFeature(XML_WITH_REGEXP)) fprintf(stderr, "Regexps ");
@@ -3046,7 +3057,7 @@ static void usage(const char *name) {
     printf("\t--noblanks : drop (ignorable?) blanks spaces\n");
     printf("\t--nocdata : replace cdata section with text nodes\n");
 #ifdef LIBXML_OUTPUT_ENABLED
-    printf("\t--format : reformat/reindent the input\n");
+    printf("\t--format : reformat/reindent the output\n");
     printf("\t--encode encoding : output in the given encoding\n");
     printf("\t--dropdtd : remove the DOCTYPE of the input docs\n");
     printf("\t--pretty STYLE : pretty-print in a particular style\n");
