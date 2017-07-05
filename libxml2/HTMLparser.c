@@ -524,14 +524,24 @@ htmlCurrentChar(xmlParserCtxtPtr ctxt, int *len) {
 
         guess = htmlFindEncoding(ctxt);
         if (guess == NULL) {
-            xmlSwitchEncoding(ctxt, XML_CHAR_ENCODING_8859_1);
+            int ret = xmlSwitchEncoding(ctxt, XML_CHAR_ENCODING_8859_1);
+            if (ret < 0) {
+                htmlParseErr(ctxt, ctxt->errNo ? ctxt->errNo : XML_I18N_CONV_FAILED,
+                             "htmlCheckEncoding: error switching to encoding 'ISO-8859-1'\n",
+                             NULL, NULL);
+            }
         } else {
             if (ctxt->input->encoding != NULL)
                 xmlFree((xmlChar *) ctxt->input->encoding);
             ctxt->input->encoding = guess;
             handler = xmlFindCharEncodingHandler((const char *) guess);
             if (handler != NULL) {
-                xmlSwitchToEncoding(ctxt, handler);
+                int ret = xmlSwitchToEncoding(ctxt, handler);
+                if (ret < 0) {
+                    htmlParseErr(ctxt, ctxt->errNo ? ctxt->errNo : XML_I18N_CONV_FAILED,
+                                 "htmlCheckEncoding: error switching to encoding '%s'\n",
+                                 guess, NULL);
+                }
             } else {
                 htmlParseErr(ctxt, XML_ERR_INVALID_ENCODING,
                              "Unsupported encoding %s", guess, NULL);
@@ -2536,8 +2546,12 @@ htmlParseNameComplex(xmlParserCtxtPtr ctxt) {
 	}
     }
 
-    if (BASE_PTR > CUR_PTR - len)
-	return(NULL);
+    if (ctxt->input->cur - ctxt->input->base < len) {
+        /* Sanity check */
+	htmlParseErr(ctxt, XML_ERR_INTERNAL_ERROR,
+                     "unexpected change of input buffer", NULL, NULL);
+        return (NULL);
+    }
 
     return(xmlDictLookup(ctxt->dict, ctxt->input->cur - len, len));
 }
@@ -3609,7 +3623,12 @@ htmlCheckEncodingDirect(htmlParserCtxtPtr ctxt, const xmlChar *encoding) {
 		             "htmlCheckEncoding: wrong encoding meta\n",
 			     NULL, NULL);
 	    } else {
-		xmlSwitchEncoding(ctxt, enc);
+                int ret = xmlSwitchEncoding(ctxt, enc);
+                if (ret < 0) {
+                    htmlParseErr(ctxt, ctxt->errNo ? ctxt->errNo : XML_I18N_CONV_FAILED,
+                                 "htmlCheckEncoding: error switching to encoding '%s'\n",
+                                 encoding, NULL);
+                }
 	    }
 	    ctxt->charset = XML_CHAR_ENCODING_UTF8;
 	} else {
@@ -3618,7 +3637,12 @@ htmlCheckEncodingDirect(htmlParserCtxtPtr ctxt, const xmlChar *encoding) {
 	     */
 	    handler = xmlFindCharEncodingHandler((const char *) encoding);
 	    if (handler != NULL) {
-		xmlSwitchToEncoding(ctxt, handler);
+                int ret = xmlSwitchToEncoding(ctxt, handler);
+                if (ret < 0) {
+                    htmlParseErr(ctxt, ctxt->errNo ? ctxt->errNo : XML_I18N_CONV_FAILED,
+                                 "htmlCheckEncoding: error switching to encoding '%s'\n",
+                                 encoding, NULL);
+                }
 		ctxt->charset = XML_CHAR_ENCODING_UTF8;
 	    } else {
 		htmlParseErr(ctxt, XML_ERR_UNSUPPORTED_ENCODING,
@@ -4452,7 +4476,7 @@ static void
 htmlParseElementInternal(htmlParserCtxtPtr ctxt) {
     const xmlChar *name;
     const htmlElemDesc * info;
-    htmlParserNodeInfo node_info = { 0, };
+    htmlParserNodeInfo node_info = { NULL, 0, 0, 0, 0 };
     int failed;
 
     if ((ctxt == NULL) || (ctxt->input == NULL)) {
@@ -4762,8 +4786,18 @@ htmlParseDocument(htmlParserCtxtPtr ctxt) {
 	start[3] = NXT(3);
 	enc = xmlDetectCharEncoding(&start[0], 4);
 	if (enc != XML_CHAR_ENCODING_NONE) {
-	    xmlSwitchEncoding(ctxt, enc);
-	}
+            int ret = xmlSwitchEncoding(ctxt, enc);
+            if (ret < 0) {
+                char buf[20];
+                snprintf(&buf[0], 20, "0x%02X 0x%02X 0x%02X 0x%02X",
+                         start[0], start[1],
+                         start[2], start[3]);
+                buf[19] = 0;
+                htmlParseErr(ctxt, ctxt->errNo ? ctxt->errNo : XML_I18N_CONV_FAILED,
+                             "htmlCheckEncoding: error switching to encoding, bytes %s\n",
+                             (const xmlChar *)buf, NULL);
+            }
+        }
     }
 
     /*
@@ -4949,6 +4983,7 @@ htmlInitParserCtxt(htmlParserCtxtPtr ctxt)
     ctxt->wellFormed = 1;
     ctxt->replaceEntities = 0;
     ctxt->linenumbers = xmlLineNumbersDefaultValue;
+    ctxt->keepBlanks = xmlKeepBlanksDefaultValue;
     ctxt->html = 1;
     ctxt->vctxt.finishDtd = XML_CTXT_FINISH_DTD_0;
     ctxt->vctxt.userData = ctxt;
@@ -5080,19 +5115,28 @@ htmlCreateDocParserCtxt(const xmlChar *cur, const char *encoding) {
 	 * registered set of known encodings
 	 */
 	if (enc != XML_CHAR_ENCODING_ERROR) {
-	    xmlSwitchEncoding(ctxt, enc);
+            int ret = xmlSwitchEncoding(ctxt, enc);
 	    if (ctxt->errNo == XML_ERR_UNSUPPORTED_ENCODING) {
 		htmlParseErr(ctxt, XML_ERR_UNSUPPORTED_ENCODING,
 		             "Unsupported encoding %s\n",
 			     (const xmlChar *) encoding, NULL);
-	    }
+            } else if (ret < 0) {
+                htmlParseErr(ctxt, ctxt->errNo ? ctxt->errNo : XML_I18N_CONV_FAILED,
+                             "htmlCheckEncoding: error switching to encoding '%s'\n",
+                             (const xmlChar *)encoding, NULL);
+            }
 	} else {
 	    /*
 	     * fallback for unknown encodings
 	     */
 	    handler = xmlFindCharEncodingHandler((const char *) encoding);
 	    if (handler != NULL) {
-		xmlSwitchToEncoding(ctxt, handler);
+                int ret = xmlSwitchToEncoding(ctxt, handler);
+                if (ret < 0) {
+                    htmlParseErr(ctxt, ctxt->errNo ? ctxt->errNo : XML_I18N_CONV_FAILED,
+                                 "htmlCheckEncoding: error switching to encoding '%s'\n",
+                                 (const xmlChar *)encoding, NULL);
+                }
 	    } else {
 		htmlParseErr(ctxt, XML_ERR_UNSUPPORTED_ENCODING,
 		             "Unsupported encoding %s\n",
@@ -6287,7 +6331,8 @@ htmlCreatePushParserCtxt(htmlSAXHandlerPtr sax, void *user_data,
  */
 
 htmlDocPtr
-htmlSAXParseDoc(xmlChar *cur, const char *encoding, htmlSAXHandlerPtr sax, void *userData) {
+htmlSAXParseDoc(const xmlChar *cur, const char *encoding,
+                htmlSAXHandlerPtr sax, void *userData) {
     htmlDocPtr ret;
     htmlParserCtxtPtr ctxt;
 
@@ -6326,7 +6371,7 @@ htmlSAXParseDoc(xmlChar *cur, const char *encoding, htmlSAXHandlerPtr sax, void 
  */
 
 htmlDocPtr
-htmlParseDoc(xmlChar *cur, const char *encoding) {
+htmlParseDoc(const xmlChar *cur, const char *encoding) {
     return(htmlSAXParseDoc(cur, encoding, NULL, NULL));
 }
 
@@ -6380,13 +6425,13 @@ htmlCreateFileParserCtxt(const char *filename, const char *encoding)
 
     /* set encoding */
     if (encoding) {
-        size_t l = strlen(encoding);
+        size_t encodingLength = strlen(encoding);
 
-	if (l < 1000) {
-	    content = xmlMallocAtomic (xmlStrlen(content_line) + l + 1);
+	if (encodingLength < 1000) {
+	    const size_t contentLength = xmlStrlen(content_line) + encodingLength + 1;
+	    content = xmlMallocAtomic(contentLength);
 	    if (content) {
-		strcpy ((char *)content, (char *)content_line);
-		strcat ((char *)content, (char *)encoding);
+		snprintf((char *)content, contentLength, "%s%s", (char *)content_line, (char *)encoding);
 		htmlCheckEncoding (ctxt, content);
 		xmlFree (content);
 	    }
@@ -6836,10 +6881,16 @@ htmlDoRead(htmlParserCtxtPtr ctxt, const char *URL, const char *encoding,
 
 	hdlr = xmlFindCharEncodingHandler(encoding);
 	if (hdlr != NULL) {
-	    xmlSwitchToEncoding(ctxt, hdlr);
-	    if (ctxt->input->encoding != NULL)
-	      xmlFree((xmlChar *) ctxt->input->encoding);
-            ctxt->input->encoding = xmlStrdup((xmlChar *)encoding);
+            int retval = xmlSwitchToEncoding(ctxt, hdlr);
+            if (retval < 0) {
+                htmlParseErr(ctxt, ctxt->errNo ? ctxt->errNo : XML_I18N_CONV_FAILED,
+                             "htmlCheckEncoding: error switching to encoding '%s'\n",
+                             (const xmlChar *)encoding, NULL);
+            } else {
+                if (ctxt->input->encoding != NULL)
+                    xmlFree((xmlChar *) ctxt->input->encoding);
+                ctxt->input->encoding = xmlStrdup((xmlChar *)encoding);
+            }
         }
     }
     if ((URL != NULL) && (ctxt->input != NULL) &&

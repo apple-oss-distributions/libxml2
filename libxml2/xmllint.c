@@ -212,6 +212,7 @@ static const char *xpathquery = NULL;
 #endif
 static int options = XML_PARSE_COMPACT | XML_PARSE_BIG_LINES;
 static int sax = 0;
+static int sax_fatal_stop = 0;
 static int oldxml10 = 0;
 
 /************************************************************************
@@ -1435,7 +1436,7 @@ warningDebug(void *ctx ATTRIBUTE_UNUSED, const char *msg, ...)
  * extra parameters.
  */
 static void XMLCDECL LIBXML_ATTR_FORMAT(2,3)
-errorDebug(void *ctx ATTRIBUTE_UNUSED, const char *msg, ...)
+errorDebug(void *ctx, const char *msg, ...)
 {
     va_list args;
 
@@ -1446,6 +1447,13 @@ errorDebug(void *ctx ATTRIBUTE_UNUSED, const char *msg, ...)
     fprintf(stdout, "SAX.error: ");
     vfprintf(stdout, msg, args);
     va_end(args);
+
+    if (sax_fatal_stop) {
+        xmlParserCtxtPtr ctxt = (xmlParserCtxtPtr)ctx;
+        xmlErrorPtr error = xmlCtxtGetLastError(ctxt);
+        if (error != NULL && error->level == XML_ERR_FATAL)
+            xmlStopParser(ctxt);
+    }
 }
 
 /**
@@ -1635,7 +1643,6 @@ static xmlSAXHandlerPtr debugSAX2Handler = &debugSAX2HandlerStruct;
 static void
 testSAX(const char *filename) {
     xmlSAXHandlerPtr handler;
-    const char *user_data = "user_data"; /* mostly for debugging */
     xmlParserInputBufferPtr buf = NULL;
     xmlParserInputPtr inputStream;
     xmlParserCtxtPtr ctxt = NULL;
@@ -1664,6 +1671,7 @@ testSAX(const char *filename) {
 #ifdef LIBXML_SCHEMAS_ENABLED
     if (wxschemas != NULL) {
         int ret;
+        const char *user_data = "user_data"; /* mostly for debugging */
 	xmlSchemaValidCtxtPtr vctxt;
 
 	vctxt = xmlSchemaNewValidCtxt(wxschemas);
@@ -1699,9 +1707,10 @@ testSAX(const char *filename) {
 	    xmlFreeParserInputBuffer(buf);
 	    goto error;
 	}
+	xmlCtxtUseOptions(ctxt, options);
 	old_sax = ctxt->sax;
 	ctxt->sax = handler;
-	ctxt->userData = (void *) user_data;
+	ctxt->userData = (void *)ctxt;
 	inputStream = xmlNewIOInputStream(ctxt, buf, XML_CHAR_ENCODING_NONE);
 	if (inputStream == NULL) {
 	    xmlFreeParserInputBuffer(buf);
@@ -2213,15 +2222,13 @@ static void parseAndPrintFile(char *filename, xmlParserCtxtPtr rectxt) {
 
             res = fread(chars, 1, 4, f);
             if (res > 0) {
-                int ret = 0;
                 ctxt = htmlCreatePushParserCtxt(NULL, NULL,
                             chars, res, filename, XML_CHAR_ENCODING_NONE);
                 xmlCtxtUseOptions(ctxt, options);
-                while ((res = fread(chars, 1, pushsize, f)) > 0 && ret == 0) {
-                    ret = htmlParseChunk(ctxt, chars, res, 0);
+                while ((res = fread(chars, 1, pushsize, f)) > 0) {
+                    htmlParseChunk(ctxt, chars, res, 0);
                 }
-                if (ret == 0)
-                    htmlParseChunk(ctxt, chars, 0, 1);
+                htmlParseChunk(ctxt, chars, 0, 1);
                 doc = ctxt->myDoc;
                 htmlFreeParserCtxt(ctxt);
             }
@@ -2278,7 +2285,7 @@ static void parseAndPrintFile(char *filename, xmlParserCtxtPtr rectxt) {
 #endif
 	    }
 	    if (f != NULL) {
-		int ret = 0;
+	        int ret;
 	        int res, size = 1024;
 	        char chars[1024];
                 xmlParserCtxtPtr ctxt;
@@ -2289,11 +2296,10 @@ static void parseAndPrintFile(char *filename, xmlParserCtxtPtr rectxt) {
 		    ctxt = xmlCreatePushParserCtxt(NULL, NULL,
 		                chars, res, filename);
 		    xmlCtxtUseOptions(ctxt, options);
-		    while ((res = fread(chars, 1, size, f)) > 0 && ret == 0) {
-			ret = xmlParseChunk(ctxt, chars, res, 0);
+		    while ((res = fread(chars, 1, size, f)) > 0) {
+			xmlParseChunk(ctxt, chars, res, 0);
 		    }
-		    if (ret == 0)
-			xmlParseChunk(ctxt, chars, 0, 1);
+		    xmlParseChunk(ctxt, chars, 0, 1);
 		    doc = ctxt->myDoc;
 		    ret = ctxt->wellFormed;
 		    xmlFreeParserCtxt(ctxt);
@@ -3105,6 +3111,7 @@ static void usage(const char *name) {
     printf("\t--sax1: use the old SAX1 interfaces for processing\n");
 #endif
     printf("\t--sax: do not build a tree but work just at the SAX level\n");
+    printf("\t--sax-fatal-stop: call xmlStopParser() on fatal errors during SAX parsing\n");
     printf("\t--oldxml10: use XML-1.0 parsing rules before the 5th edition\n");
 #ifdef LIBXML_XPATH_ENABLED
     printf("\t--xpath expr: evaluate the XPath expression, imply --noout\n");
@@ -3433,6 +3440,10 @@ main(int argc, char **argv) {
 	    options |= XML_PARSE_SAX1;
 	}
 #endif /* LIBXML_SAX1_ENABLED */
+        else if ((!strcmp(argv[i], "-sax-fatal-stop")) ||
+                 (!strcmp(argv[i], "--sax-fatal-stop"))) {
+            sax_fatal_stop++;
+        }
 	else if ((!strcmp(argv[i], "-sax")) ||
 	         (!strcmp(argv[i], "--sax"))) {
 	    sax++;

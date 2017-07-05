@@ -166,7 +166,7 @@ static const xmlChar *xmlNamespaceNs = (const xmlChar *)
 /*
 * Macros for attribute uses.
 */
-#define WXS_ATTRUSE_DECL(au) WXS_ATTR_CAST (WXS_ATTR_USE_CAST (au))->attrDecl
+#define WXS_ATTRUSE_DECL(au) (WXS_ATTR_USE_CAST (au))->attrDecl
 
 #define WXS_ATTRUSE_TYPEDEF(au) WXS_ATTR_TYPEDEF(WXS_ATTRUSE_DECL( WXS_ATTR_USE_CAST au))
 
@@ -363,6 +363,7 @@ typedef struct _xmlSchemaAbstractCtxt xmlSchemaAbstractCtxt;
 typedef xmlSchemaAbstractCtxt *xmlSchemaAbstractCtxtPtr;
 struct _xmlSchemaAbstractCtxt {
     int type; /* E.g. XML_SCHEMA_CTXT_VALIDATOR */
+    void *dummy; /* Fix alignment issues */
 };
 
 typedef struct _xmlSchemaBucket xmlSchemaBucket;
@@ -473,6 +474,7 @@ typedef struct _xmlSchemaBasicItem xmlSchemaBasicItem;
 typedef xmlSchemaBasicItem *xmlSchemaBasicItemPtr;
 struct _xmlSchemaBasicItem {
     xmlSchemaTypeType type;
+    void *dummy; /* Fix alignment issues */
 };
 
 /**
@@ -3212,8 +3214,8 @@ xmlSchemaPSimpleTypeErr(xmlSchemaParserCtxtPtr ctxt,
 		"valid.");
 	}
 	if (expected) {
-	    msg = xmlStrcat(msg, BAD_CAST " Expected is '");
 	    xmlChar *expectedEscaped = xmlCharStrdup(expected);
+	    msg = xmlStrcat(msg, BAD_CAST " Expected is '");
 	    msg = xmlStrcat(msg, xmlEscapeFormatString(&expectedEscaped));
 	    FREE_AND_NULL(expectedEscaped);
 	    msg = xmlStrcat(msg, BAD_CAST "'.\n");
@@ -15940,7 +15942,7 @@ xmlSchemaParseCheckCOSValidDefault(xmlSchemaParserCtxtPtr pctxt,
  * STATUS: (seems) complete
  *
  * Returns 0 if the constraints are satisfied, a positive
- * error code if not and -1 if an internal error occured.
+ * error code if not and -1 if an internal error occurred.
  */
 static int
 xmlSchemaCheckCTPropsCorrect(xmlSchemaParserCtxtPtr pctxt,
@@ -16187,7 +16189,7 @@ xmlSchemaCheckCOSDerivedOK(xmlSchemaAbstractCtxtPtr actxt,
  *     (1.4.3.2.2.2) "Particle Valid (Extension)"
  *
  * Returns 0 if the constraints are satisfied, a positive
- * error code if not and -1 if an internal error occured.
+ * error code if not and -1 if an internal error occurred.
  */
 static int
 xmlSchemaCheckCOSCTExtends(xmlSchemaParserCtxtPtr ctxt,
@@ -16444,7 +16446,7 @@ xmlSchemaCheckCOSCTExtends(xmlSchemaParserCtxtPtr ctxt,
  * Validation Rule: Checking complex type subsumption
  *
  * Returns 0 if the constraints are satisfied, a positive
- * error code if not and -1 if an internal error occured.
+ * error code if not and -1 if an internal error occurred.
  */
 static int
 xmlSchemaCheckDerivationOKRestriction(xmlSchemaParserCtxtPtr ctxt,
@@ -16634,7 +16636,7 @@ xmlSchemaCheckDerivationOKRestriction(xmlSchemaParserCtxtPtr ctxt,
  * (3.4.6) Constraints on Complex Type Definition Schema Components
  *
  * Returns 0 if the constraints are satisfied, a positive
- * error code if not and -1 if an internal error occured.
+ * error code if not and -1 if an internal error occurred.
  */
 static int
 xmlSchemaCheckCTComponent(xmlSchemaParserCtxtPtr ctxt,
@@ -16664,7 +16666,7 @@ xmlSchemaCheckCTComponent(xmlSchemaParserCtxtPtr ctxt,
  * Complex Type Definition Representation OK (src-ct)
  *
  * Returns 0 if the constraints are satisfied, a positive
- * error code if not and -1 if an internal error occured.
+ * error code if not and -1 if an internal error occurred.
  */
 static int
 xmlSchemaCheckSRCCT(xmlSchemaParserCtxtPtr ctxt,
@@ -16833,7 +16835,7 @@ xmlSchemaCheckSRCCT(xmlSchemaParserCtxtPtr ctxt,
  * STATUS: complete
  *
  * Returns 0 if the constraints are satisfied, a positive
- * error code if not and -1 if an internal error occured.
+ * error code if not and -1 if an internal error occurred.
  */
 static int
 xmlSchemaCheckParticleRangeOK(int rmin, int rmax,
@@ -16863,7 +16865,7 @@ xmlSchemaCheckParticleRangeOK(int rmin, int rmax,
  *   CLARIFY: (3.2.2)
  *
  * Returns 0 if the constraints are satisfied, a positive
- * error code if not and -1 if an internal error occured.
+ * error code if not and -1 if an internal error occurred.
  */
 static int
 xmlSchemaCheckRCaseNameAndTypeOK(xmlSchemaParserCtxtPtr ctxt,
@@ -16968,7 +16970,7 @@ xmlSchemaCheckRCaseNameAndTypeOK(xmlSchemaParserCtxtPtr ctxt,
  * STATUS: complete
  *
  * Returns 0 if the constraints are satisfied, a positive
- * error code if not and -1 if an internal error occured.
+ * error code if not and -1 if an internal error occurred.
  */
 static int
 xmlSchemaCheckRCaseNSCompat(xmlSchemaParserCtxtPtr ctxt,
@@ -17012,7 +17014,7 @@ xmlSchemaCheckRCaseNSCompat(xmlSchemaParserCtxtPtr ctxt,
  * STATUS: TODO
  *
  * Returns 0 if the constraints are satisfied, a positive
- * error code if not and -1 if an internal error occured.
+ * error code if not and -1 if an internal error occurred.
  */
 static int
 xmlSchemaCheckRCaseRecurseAsIfGroup(xmlSchemaParserCtxtPtr ctxt,
@@ -17038,7 +17040,7 @@ xmlSchemaCheckRCaseRecurseAsIfGroup(xmlSchemaParserCtxtPtr ctxt,
  * STATUS: complete
  *
  * Returns 0 if the constraints are satisfied, a positive
- * error code if not and -1 if an internal error occured.
+ * error code if not and -1 if an internal error occurred.
  */
 static int
 xmlSchemaCheckRCaseNSSubset(xmlSchemaParserCtxtPtr ctxt,
@@ -17088,7 +17090,7 @@ xmlSchemaCheckRCaseNSSubset(xmlSchemaParserCtxtPtr ctxt,
  * STATUS: TODO
  *
  * Returns 0 if the constraints are satisfied, a positive
- * error code if not and -1 if an internal error occured.
+ * error code if not and -1 if an internal error occurred.
  */
 static int
 xmlSchemaCheckCOSParticleRestrict(xmlSchemaParserCtxtPtr ctxt,
@@ -17129,7 +17131,7 @@ xmlSchemaCheckCOSParticleRestrict(xmlSchemaParserCtxtPtr ctxt,
  * STATUS: TODO: subst-groups
  *
  * Returns 0 if the constraints are satisfied, a positive
- * error code if not and -1 if an internal error occured.
+ * error code if not and -1 if an internal error occurred.
  */
 static int
 xmlSchemaCheckRCaseNSRecurseCheckCardinality(xmlSchemaParserCtxtPtr ctxt,
@@ -17184,7 +17186,7 @@ xmlSchemaCheckRCaseNSRecurseCheckCardinality(xmlSchemaParserCtxtPtr ctxt,
  * TODO: subst-groups
  *
  * Returns 0 if the constraints are satisfied, a positive
- * error code if not and -1 if an internal error occured.
+ * error code if not and -1 if an internal error occurred.
  */
 static int
 xmlSchemaCheckRCaseRecurse(xmlSchemaParserCtxtPtr ctxt,
@@ -17817,7 +17819,7 @@ xmlSchemaDeriveAndValidateFacets(xmlSchemaParserCtxtPtr pctxt,
     return (0);
 internal_error:
     PERROR_INT("xmlSchemaDeriveAndValidateFacets",
-	"an error occured");
+	"an error occurred");
     return (-1);
 }
 
@@ -21466,7 +21468,7 @@ exit_failure:
 	ctxt->ownsConstructor = 0;
     }
     PERROR_INT2("xmlSchemaParse",
-	"An internal error occured");
+	"An internal error occurred");
     ctxt->schema = NULL;
     return(NULL);
 }
@@ -24224,7 +24226,7 @@ xmlSchemaValidateFacets(xmlSchemaAbstractCtxtPtr actxt,
 			unsigned long length,
 			int fireErrors)
 {
-    int ret, error = 0;
+    int ret = 0, error = 0;
 
     xmlSchemaTypePtr tmpType;
     xmlSchemaFacetLinkPtr facetLink;
@@ -26147,7 +26149,7 @@ xmlSchemaValidatorPopElem(xmlSchemaValidCtxtPtr vctxt)
 
 	    /*
 	    * Get hold of the still expected content, since a further
-	    * call to xmlRegExecPushString() will loose this information.
+	    * call to xmlRegExecPushString() will lose this information.
 	    */
 	    xmlRegExecNextValues(inode->regexCtxt,
 		&nbval, &nbneg, &values[0], &terminal);
@@ -27203,7 +27205,7 @@ root_found:
 		    }
 		    if (ret < 0) {
 			/*
-			* VAL TODO: A reader error occured; what to do here?
+			* VAL TODO: A reader error occurred; what to do here?
 			*/
 			ret = 1;
 			goto exit;
@@ -27444,6 +27446,7 @@ xmlSchemaSAXHandleStartElementNs(void *ctx,
     * attributes yet.
     */
     if (nb_attributes != 0) {
+	int valueLen, k, l;
 	xmlChar *value;
 
         for (j = 0, i = 0; i < nb_attributes; i++, j += 5) {
@@ -27453,12 +27456,31 @@ xmlSchemaSAXHandleStartElementNs(void *ctx,
 	    * libxml2 differs from normal SAX here in that it escapes all ampersands
 	    * as &#38; instead of delivering the raw converted string. Changing the
 	    * behavior at this point would break applications that use this API, so
-	    * we are forced to work around it. There is no danger of accidentally
-	    * decoding some entity other than &#38; in this step because without
-	    * unescaped ampersands there can be no other entities in the string.
+	    * we are forced to work around it.
 	    */
-	    value = xmlStringLenDecodeEntities(vctxt->parserCtxt, attributes[j+3],
-		attributes[j+4] - attributes[j+3], XML_SUBSTITUTE_REF, 0, 0, 0);
+	    valueLen = attributes[j+4] - attributes[j+3];
+	    value = xmlMallocAtomic(valueLen + 1);
+	    if (value == NULL) {
+		xmlSchemaVErrMemory(vctxt,
+		    "allocating string for decoded attribute",
+		    NULL);
+		goto internal_error;
+	    }
+	    for (k = 0, l = 0; k < valueLen; l++) {
+		if (k < valueLen - 4 &&
+		    attributes[j+3][k+0] == '&' &&
+		    attributes[j+3][k+1] == '#' &&
+		    attributes[j+3][k+2] == '3' &&
+		    attributes[j+3][k+3] == '8' &&
+		    attributes[j+3][k+4] == ';') {
+		    value[l] = '&';
+		    k += 5;
+		} else {
+		    value[l] = attributes[j+3][k];
+		    k++;
+		}
+	    }
+	    value[l] = '\0';
 	    /*
 	    * TODO: Set the node line.
 	    */
