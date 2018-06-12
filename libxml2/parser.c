@@ -89,8 +89,8 @@
 #include "buf.h"
 #include "enc.h"
 
-LIBXML_INTERNAL const int xmlEntityDecodingDepthMax = 40;
-LIBXML_INTERNAL const int xmlEntityDecodingDepthHugeMax = 1024;
+const int xmlEntityDecodingDepthMax = 40;
+const int xmlEntityDecodingDepthHugeMax = 1024;
 
 static void
 xmlFatalErr(xmlParserCtxtPtr ctxt, xmlParserErrors error, const char *info);
@@ -3568,6 +3568,12 @@ xmlParseNCNameComplex(xmlParserCtxtPtr ctxt) {
 	NEXTL(l);
 	c = CUR_CHAR(l);
 	if (c == 0) {
+            /*
+             * A xmlStructuredErrorFunc could call xmlStopParser(), so
+             * return early if that happens.
+             */
+            if (ctxt->instate == XML_PARSER_EOF)
+                return(NULL);
 	    count = 0;
 	    /*
 	     * when shrinking to extend the buffer we really need to preserve
@@ -3576,9 +3582,9 @@ xmlParseNCNameComplex(xmlParserCtxtPtr ctxt) {
 	     */
 	    ctxt->input->cur -= l;
 	    GROW;
-	    ctxt->input->cur += l;
             if (ctxt->instate == XML_PARSER_EOF)
                 return(NULL);
+	    ctxt->input->cur += l;
 	    c = CUR_CHAR(l);
 	}
     }
@@ -12536,6 +12542,7 @@ xmldecl_done:
 		    /* TODO 2.6.0 */
 		    xmlGenericError(xmlGenericErrorContext,
 				    "xmlParseChunk: encoder error\n");
+                    xmlHaltParser(ctxt);
 		    return(XML_ERR_INVALID_ENCODING);
 		}
 		xmlBufSetInputBaseCur(in->buffer, ctxt->input, base, current);
