@@ -276,6 +276,59 @@ xmlTextReaderRemoveID(xmlDocPtr doc, xmlAttrPtr attr) {
 }
 
 /**
+ * xmlTextReaderWalkRemoveRef:
+ * @data:  Contents of current link
+ * @user:  Value supplied by the user
+ *
+ * Returns 0 to abort the walk or 1 to continue
+ */
+static int
+xmlTextReaderWalkRemoveRef(const void *data, void *user)
+{
+    xmlRefPtr ref = (xmlRefPtr)data;
+    xmlAttrPtr attr = (xmlAttrPtr)user;
+
+    if (ref->attr == attr) { /* Matched: remove and terminate walk */
+        ref->name = xmlStrdup(attr->name);
+        ref->attr = NULL;
+        return 0;
+    }
+    return 1;
+}
+
+/**
+ * xmlTextReaderRemoveRef:
+ * @doc:  the document
+ * @attr:  the attribute
+ *
+ * Remove the given attribute from the Ref table maintained internally.
+ *
+ * Returns -1 if the lookup failed and 0 otherwise
+ */
+static int
+xmlTextReaderRemoveRef(xmlDocPtr doc, xmlAttrPtr attr) {
+    xmlListPtr ref_list;
+    xmlRefTablePtr table;
+    xmlChar *ID;
+
+    if (doc == NULL) return(-1);
+    if (attr == NULL) return(-1);
+    table = (xmlRefTablePtr) doc->refs;
+    if (table == NULL)
+        return(-1);
+
+    ID = xmlNodeListGetString(doc, attr->children, 1);
+    if (ID == NULL)
+        return(-1);
+    ref_list = xmlHashLookup(table, ID);
+    xmlFree(ID);
+    if(ref_list == NULL)
+        return (-1);
+    xmlListWalk(ref_list, xmlTextReaderWalkRemoveRef, attr);
+    return(0);
+}
+
+/**
  * xmlTextReaderFreeProp:
  * @reader:  the xmlTextReaderPtr used
  * @cur:  the node
@@ -296,11 +349,13 @@ xmlTextReaderFreeProp(xmlTextReaderPtr reader, xmlAttrPtr cur) {
 	xmlDeregisterNodeDefaultValue((xmlNodePtr) cur);
 
     /* Check for ID removal -> leading to invalid references ! */
-    if ((cur->parent != NULL) && (cur->parent->doc != NULL) &&
-	((cur->parent->doc->intSubset != NULL) ||
-	 (cur->parent->doc->extSubset != NULL))) {
+    if ((cur->parent != NULL) && (cur->parent->doc != NULL)) {
         if (xmlIsID(cur->parent->doc, cur->parent, cur))
 	    xmlTextReaderRemoveID(cur->parent->doc, cur);
+	if (((cur->parent->doc->intSubset != NULL) ||
+	     (cur->parent->doc->extSubset != NULL)) &&
+            (xmlIsRef(cur->parent->doc, cur->parent, cur)))
+            xmlTextReaderRemoveRef(cur->parent->doc, cur);
     }
     if (cur->children != NULL)
         xmlTextReaderFreeNodeList(reader, cur->children);
@@ -1425,6 +1480,8 @@ get_next_node:
             (reader->node->prev->type != XML_DTD_NODE)) {
 	    xmlNodePtr tmp = reader->node->prev;
 	    if ((tmp->extra & NODE_IS_PRESERVED) == 0) {
+                if (oldnode == tmp)
+                    oldnode = NULL;
 		xmlUnlinkNode(tmp);
 		xmlTextReaderFreeNode(reader, tmp);
 	    }
