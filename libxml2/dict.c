@@ -10,7 +10,7 @@
  *
  * THIS SOFTWARE IS PROVIDED ``AS IS'' AND WITHOUT ANY EXPRESS OR IMPLIED
  * WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED WARRANTIES OF
- * MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE. THE AUTHORS AND
+ * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE. THE AUTHORS AND
  * CONTRIBUTORS ACCEPT NO RESPONSIBILITY IN ANY CONCEIVABLE MANNER.
  *
  * Author: daniel@veillard.com
@@ -27,6 +27,16 @@
 #include <time.h>
 #endif
 
+#ifdef LIBXML_THREAD_ENABLED
+#ifdef HAVE_PTHREAD_H
+#include <pthread.h>
+#elif defined(HAVE_WIN32_THREADS)
+#include <windows.h>
+#elif defined(HAVE_BEOS_THREADS)
+#include <OS.h>
+#endif
+#endif
+
 /*
  * Following http://www.ocert.org/advisories/ocert-2011-003.html
  * it seems that having hash randomization might be a good idea
@@ -38,7 +48,8 @@
  *  list we will use the BigKey algo as soon as the hash size grows
  *  over MIN_DICT_SIZE so this actually works
  */
-#if defined(HAVE_RAND) && defined(HAVE_SRAND) && defined(HAVE_TIME)
+#if defined(HAVE_RAND) && defined(HAVE_SRAND) && defined(HAVE_TIME) && \
+    !defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION)
 #define DICT_RANDOMIZATION
 #endif
 
@@ -48,7 +59,7 @@
 #else
 #ifdef HAVE_INTTYPES_H
 #include <inttypes.h>
-#elif defined(WIN32)
+#elif defined(_WIN32)
 typedef unsigned __int32 uint32_t;
 #endif
 #endif
@@ -134,9 +145,20 @@ struct _xmlDict {
 static xmlRMutexPtr xmlDictMutex = NULL;
 
 /*
- * Whether the dictionary mutex was initialized.
+ * Initialize dictionary mutex only once.
  */
-static int xmlDictInitialized = 0;
+#ifdef LIBXML_THREAD_ENABLED
+#ifdef HAVE_PTHREAD_H
+static pthread_once_t once_control = PTHREAD_ONCE_INIT;
+#elif defined(HAVE_WIN32_THREADS)
+static struct {
+    DWORD done;
+    DWORD control;
+} run_once = {0, 0};
+#elif defined(HAVE_BEOS_THREADS)
+static int32 run_once_init = 0;
+#endif
+#endif
 
 #ifdef DICT_RANDOMIZATION
 #ifdef HAVE_RAND_R
@@ -161,23 +183,15 @@ int xmlInitializeDict(void) {
 }
 
 /**
- * __xmlInitializeDict:
+ * _xmlInitializeDictMutex:
  *
- * This function is not public
- * Do the dictionary mutex initialization.
- * this function is not thread safe, initialization should
- * normally be done once at setup when called from xmlOnceInit()
- * we may also land in this code if thread support is not compiled in
- *
- * Returns 0 if initialization was already done, and 1 if that
- * call led to the initialization
+ * This function is not public.
+ * Called exactly once to initialize global xmlDictMutex and
+ * to seed psuedo-random number generator.
  */
-int __xmlInitializeDict(void) {
-    if (xmlDictInitialized)
-        return(1);
+static void _xmlInitializeDictMutex(void) {
+    xmlDictMutex = xmlNewRMutex();
 
-    if ((xmlDictMutex = xmlNewRMutex()) == NULL)
-        return(0);
     xmlRMutexLock(xmlDictMutex);
 
 #ifdef DICT_RANDOMIZATION
@@ -188,16 +202,58 @@ int __xmlInitializeDict(void) {
     srand(time(NULL));
 #endif
 #endif
-    xmlDictInitialized = 1;
+
     xmlRMutexUnlock(xmlDictMutex);
-    return(1);
+}
+
+/**
+ * __xmlInitializeDict:
+ *
+ * This function is not public
+ * Do the dictionary mutex initialization.
+ * this function is not thread safe, initialization should
+ * normally be done once at setup when called from xmlOnceInit()
+ * we may also land in this code if thread support is not compiled in
+ *
+ * Returns 0 if initialization failed, else returns 1.
+ */
+int __xmlInitializeDict(void) {
+    if (xmlDictMutex)
+        return(1);
+
+#ifdef LIBXML_THREAD_ENABLED
+#ifdef HAVE_PTHREAD_H
+    pthread_once(&once_control, _xmlInitializeDictMutex);
+#elif defined(HAVE_WIN32_THREADS)
+    if (!run_once.done) {
+        if (InterlockedIncrement(&run_once.control) == 1) {
+            _xmlInitializeDictMutex();
+            run_once.done = 1;
+        } else {
+            /* Another thread is working; give up our slice and
+             * wait until they're done. */
+            while (!run_once.done)
+                Sleep(0);
+        }
+    }
+#elif defined(HAVE_BEOS_THREADS)
+    if (atomic_add(&run_once_init, 1) == 0)
+        _xmlInitializeDictMutex();
+    else
+        atomic_add(&run_once_init, -1);
+#endif
+#else
+    _xmlInitializeDictMutex();
+#endif
+
+    return(xmlDictMutex != NULL);
 }
 
 #ifdef DICT_RANDOMIZATION
 int __xmlRandom(void) {
     int ret;
 
-    if (xmlDictInitialized == 0)
+    if (!xmlDictMutex)
         __xmlInitializeDict();
 
     xmlRMutexLock(xmlDictMutex);
@@ -216,15 +272,18 @@ int __xmlRandom(void) {
  *
  * Free the dictionary mutex. Do not call unless sure the library
  * is not in use anymore !
+ * Does nothing when LIBXML_THREAD_ENABLED is set since the
+ * dictionary mutex can not be freed safely.
  */
 void
 xmlDictCleanup(void) {
-    if (!xmlDictInitialized)
+#ifndef LIBXML_THREAD_ENABLED
+    if (!xmlDictMutex)
         return;
 
     xmlFreeRMutex(xmlDictMutex);
-
-    xmlDictInitialized = 0;
+    xmlDictMutex = NULL;
+#endif
 }
 
 /*
@@ -249,7 +308,7 @@ xmlDictAddString(xmlDictPtr dict, const xmlChar *name, unsigned int namelen) {
 #endif
     pool = dict->strings;
     while (pool != NULL) {
-	if (pool->end - pool->free > namelen)
+	if ((size_t)(pool->end - pool->free) > namelen)
 	    goto found_pool;
 	if (pool->size > size) size = pool->size;
         limit += pool->size;
@@ -317,7 +376,7 @@ xmlDictAddQString(xmlDictPtr dict, const xmlChar *prefix, unsigned int plen,
 #endif
     pool = dict->strings;
     while (pool != NULL) {
-	if (pool->end - pool->free > namelen + plen + 1)
+	if ((size_t)(pool->end - pool->free) > namelen + plen + 1)
 	    goto found_pool;
 	if (pool->size > size) size = pool->size;
         limit += pool->size;
@@ -371,6 +430,9 @@ found_pool:
  * http://burtleburtle.net/bob/hash/doobs.html
  */
 
+#ifdef __clang__
+ATTRIBUTE_NO_SANITIZE("unsigned-integer-overflow")
+#endif
 static uint32_t
 xmlDictComputeBigKey(const xmlChar* data, int namelen, int seed) {
     uint32_t hash;
@@ -403,6 +465,9 @@ xmlDictComputeBigKey(const xmlChar* data, int namelen, int seed) {
  *
  * Neither of the two strings must be NULL.
  */
+#ifdef __clang__
+ATTRIBUTE_NO_SANITIZE("unsigned-integer-overflow")
+#endif
 static unsigned long
 xmlDictComputeBigQKey(const xmlChar *prefix, int plen,
                       const xmlChar *name, int len, int seed)
@@ -445,7 +510,7 @@ xmlDictComputeFastKey(const xmlChar *name, int namelen, int seed) {
     unsigned long value = seed;
 
     if (name == NULL) return(0);
-    value = *name;
+    value += *name;
     value <<= 5;
     if (namelen > 10) {
         value += name[namelen - 1];
@@ -453,14 +518,23 @@ xmlDictComputeFastKey(const xmlChar *name, int namelen, int seed) {
     }
     switch (namelen) {
         case 10: value += name[9];
+        /* Falls through. */
         case 9: value += name[8];
+        /* Falls through. */
         case 8: value += name[7];
+        /* Falls through. */
         case 7: value += name[6];
+        /* Falls through. */
         case 6: value += name[5];
+        /* Falls through. */
         case 5: value += name[4];
+        /* Falls through. */
         case 4: value += name[3];
+        /* Falls through. */
         case 3: value += name[2];
+        /* Falls through. */
         case 2: value += name[1];
+        /* Falls through. */
         default: break;
     }
     return(value);
@@ -496,15 +570,25 @@ xmlDictComputeFastQKey(const xmlChar *prefix, int plen,
     }
     switch (plen) {
         case 10: value += prefix[9];
+        /* Falls through. */
         case 9: value += prefix[8];
+        /* Falls through. */
         case 8: value += prefix[7];
+        /* Falls through. */
         case 7: value += prefix[6];
+        /* Falls through. */
         case 6: value += prefix[5];
+        /* Falls through. */
         case 5: value += prefix[4];
+        /* Falls through. */
         case 4: value += prefix[3];
+        /* Falls through. */
         case 3: value += prefix[2];
+        /* Falls through. */
         case 2: value += prefix[1];
+        /* Falls through. */
         case 1: value += prefix[0];
+        /* Falls through. */
         default: break;
     }
     len -= plen;
@@ -514,15 +598,25 @@ xmlDictComputeFastQKey(const xmlChar *prefix, int plen,
     }
     switch (len) {
         case 10: value += name[9];
+        /* Falls through. */
         case 9: value += name[8];
+        /* Falls through. */
         case 8: value += name[7];
+        /* Falls through. */
         case 7: value += name[6];
+        /* Falls through. */
         case 6: value += name[5];
+        /* Falls through. */
         case 5: value += name[4];
+        /* Falls through. */
         case 4: value += name[3];
+        /* Falls through. */
         case 3: value += name[2];
+        /* Falls through. */
         case 2: value += name[1];
+        /* Falls through. */
         case 1: value += name[0];
+        /* Falls through. */
         default: break;
     }
     return(value);
@@ -539,7 +633,7 @@ xmlDictPtr
 xmlDictCreate(void) {
     xmlDictPtr dict;
 
-    if (!xmlDictInitialized)
+    if (!xmlDictMutex)
         if (!__xmlInitializeDict())
             return(NULL);
 
@@ -607,7 +701,7 @@ xmlDictCreateSub(xmlDictPtr sub) {
  */
 int
 xmlDictReference(xmlDictPtr dict) {
-    if (!xmlDictInitialized)
+    if (!xmlDictMutex)
         if (!__xmlInitializeDict())
             return(-1);
 
@@ -698,7 +792,7 @@ xmlDictGrow(xmlDictPtr dict, size_t size) {
 		dict->dict[key].next = entry;
 	    } else {
 	        /*
-		 * we don't have much ways to alert from herei
+		 * we don't have much ways to alert from here
 		 * result is losing an entry and unicity guarantee
 		 */
 	        ret = -1;
@@ -771,7 +865,7 @@ xmlDictFree(xmlDictPtr dict) {
     if (dict == NULL)
 	return;
 
-    if (!xmlDictInitialized)
+    if (!xmlDictMutex)
         if (!__xmlInitializeDict())
             return;
 
@@ -1173,7 +1267,7 @@ xmlDictQLookup(xmlDictPtr dict, const xmlChar *prefix, const xmlChar *name) {
  * @dict: the dictionary
  * @str: the string
  *
- * check if a string is owned by the disctionary
+ * check if a string is owned by the dictionary
  *
  * Returns 1 if true, 0 if false and -1 in case of error
  * -1 in case of error

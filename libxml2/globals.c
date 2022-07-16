@@ -119,6 +119,12 @@ void xmlCleanupGlobals(void)
  *									*
  ************************************************************************/
 
+void *xmlMallocZero(size_t size);
+void *xmlMallocZero(size_t size)
+{
+    return calloc(1, size);
+}
+
 /*
  * Memory allocation routines
  */
@@ -141,7 +147,7 @@ xmlStrdupFunc xmlMemStrdup = (xmlStrdupFunc) xmlMemoryStrdup;
  *
  * The variable holding the libxml free() implementation
  */
-xmlFreeFunc xmlFree = (xmlFreeFunc) free;
+xmlFreeFunc xmlFree = free;
 /**
  * xmlMalloc:
  * @size:  the size requested in bytes
@@ -150,18 +156,18 @@ xmlFreeFunc xmlFree = (xmlFreeFunc) free;
  *
  * Returns a pointer to the newly allocated block or NULL in case of error
  */
-xmlMallocFunc xmlMalloc = (xmlMallocFunc) malloc;
+xmlMallocFunc xmlMalloc = xmlMallocZero;
 /**
  * xmlMallocAtomic:
  * @size:  the size requested in bytes
  *
  * The variable holding the libxml malloc() implementation for atomic
- * data (i.e. blocks not containings pointers), useful when using a
+ * data (i.e. blocks not containing pointers), useful when using a
  * garbage collecting allocator.
  *
  * Returns a pointer to the newly allocated block or NULL in case of error
  */
-xmlMallocFunc xmlMallocAtomic = (xmlMallocFunc) malloc;
+xmlMallocFunc xmlMallocAtomic = xmlMallocZero;
 /**
  * xmlRealloc:
  * @mem: an already allocated block of memory
@@ -171,7 +177,19 @@ xmlMallocFunc xmlMallocAtomic = (xmlMallocFunc) malloc;
  *
  * Returns a pointer to the newly reallocated block or NULL in case of error
  */
-xmlReallocFunc xmlRealloc = (xmlReallocFunc) realloc;
+xmlReallocFunc xmlRealloc = realloc;
+/**
+ * xmlPosixStrdup
+ * @cur:  the input char *
+ *
+ * a strdup implementation with a type signature matching POSIX
+ *
+ * Returns a new xmlChar * or NULL
+ */
+static char *
+xmlPosixStrdup(const char *cur) {
+    return((char*) xmlCharStrdup(cur));
+}
 /**
  * xmlMemStrdup:
  * @str: a zero terminated string
@@ -180,7 +198,7 @@ xmlReallocFunc xmlRealloc = (xmlReallocFunc) realloc;
  *
  * Returns the copy of the string or NULL in case of error
  */
-xmlStrdupFunc xmlMemStrdup = (xmlStrdupFunc) xmlStrdup;
+xmlStrdupFunc xmlMemStrdup = xmlPosixStrdup;
 #endif /* DEBUG_MEMORY_LOCATION || DEBUG_MEMORY */
 
 #include <libxml/threads.h>
@@ -252,7 +270,7 @@ int oldXMLWDcompatibility = 0; /* DEPRECATED */
 /**
  * xmlParserDebugEntities:
  *
- * Global setting, asking the parser to print out debugging informations.
+ * Global setting, asking the parser to print out debugging information.
  * while handling entities.
  * Disabled by default
  */
@@ -297,7 +315,7 @@ static int xmlPedanticParserDefaultValueThrDef = 0;
  * Global setting, indicate that the parser should store the line number
  * in the content field of elements in the DOM tree.
  * Disabled by default since this may not be safe for old classes of
- * applicaton.
+ * application.
  */
 int xmlLineNumbersDefaultValue = 0;
 static int xmlLineNumbersDefaultValueThrDef = 0;
@@ -398,7 +416,7 @@ static const char *xmlTreeIndentStringThrDef = "  ";
  * xmlSaveNoEmptyTags:
  *
  * Global setting, asking the serializer to not output empty tags
- * as <empty/> but <empty></empty>. those two forms are undistinguishable
+ * as <empty/> but <empty></empty>. those two forms are indistinguishable
  * once parsed.
  * Disabled by default
  */
@@ -582,8 +600,8 @@ xmlInitializeGlobalState(xmlGlobalStatePtr gs)
     gs->xmlMemStrdup = (xmlStrdupFunc) xmlMemoryStrdup;
 #else
     gs->xmlFree = (xmlFreeFunc) free;
-    gs->xmlMalloc = (xmlMallocFunc) malloc;
-    gs->xmlMallocAtomic = (xmlMallocFunc) malloc;
+    gs->xmlMalloc = (xmlMallocFunc) xmlMallocZero;
+    gs->xmlMallocAtomic = (xmlMallocFunc) xmlMallocZero;
     gs->xmlRealloc = (xmlReallocFunc) realloc;
     gs->xmlMemStrdup = (xmlStrdupFunc) xmlStrdup;
 #endif
