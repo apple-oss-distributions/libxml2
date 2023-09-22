@@ -28,11 +28,6 @@
 #include <libxml/HTMLtree.h>
 #include <libxml/globals.h>
 
-/* Define SIZE_T_MAX unless defined through <limits.h>. */
-#ifndef SIZE_T_MAX
-# define SIZE_T_MAX     ((size_t)-1)
-#endif /* !SIZE_T_MAX */
-
 /* #define DEBUG_SAX2 */
 /* #define DEBUG_SAX2_TREE */
 
@@ -1811,13 +1806,6 @@ xmlSAX2EndElement(void *ctx, const xmlChar *name ATTRIBUTE_UNUSED)
 	xmlGenericError(xmlGenericErrorContext, "SAX.xmlSAX2EndElement(%s)\n", name);
 #endif
 
-    /* Capture end position and add node */
-    if (cur != NULL && ctxt->record_info) {
-      ctxt->nodeInfo->end_pos = ctxt->input->cur - ctxt->input->base;
-      ctxt->nodeInfo->end_line = ctxt->input->line;
-      ctxt->nodeInfo->node = cur;
-      xmlParserAddNodeInfo(ctxt, ctxt->nodeInfo);
-    }
     ctxt->nodemem = -1;
 
 #ifdef LIBXML_VALID_ENABLED
@@ -2510,24 +2498,15 @@ xmlSAX2EndElementNs(void *ctx,
 		    const xmlChar * URI ATTRIBUTE_UNUSED)
 {
     xmlParserCtxtPtr ctxt = (xmlParserCtxtPtr) ctx;
-    xmlParserNodeInfo node_info;
-    xmlNodePtr cur;
 
     if (ctx == NULL) return;
-    cur = ctxt->node;
-    /* Capture end position and add node */
-    if ((ctxt->record_info) && (cur != NULL)) {
-        node_info.end_pos = ctxt->input->cur - ctxt->input->base;
-        node_info.end_line = ctxt->input->line;
-        node_info.node = cur;
-        xmlParserAddNodeInfo(ctxt, &node_info);
-    }
     ctxt->nodemem = -1;
 
 #ifdef LIBXML_VALID_ENABLED
     if (ctxt->validate && ctxt->wellFormed &&
         ctxt->myDoc && ctxt->myDoc->intSubset)
-        ctxt->valid &= xmlValidateOneElement(&ctxt->vctxt, ctxt->myDoc, cur);
+        ctxt->valid &= xmlValidateOneElement(&ctxt->vctxt, ctxt->myDoc,
+                                             ctxt->node);
 #endif /* LIBXML_VALID_ENABLED */
 
     /*
@@ -2650,22 +2629,23 @@ xmlSAX2Text(xmlParserCtxtPtr ctxt, const xmlChar *ch, int len,
 		xmlSAX2ErrMemory(ctxt, "xmlSAX2Characters: xmlStrdup returned NULL");
 		return;
  	    }
-            if (((size_t)ctxt->nodelen + (size_t)len > XML_MAX_TEXT_LENGTH) &&
+	    if (ctxt->nodelen > INT_MAX - len) {
+                xmlSAX2ErrMemory(ctxt, "xmlSAX2Characters overflow prevented");
+                return;
+	    }
+            if ((ctxt->nodelen + len > XML_MAX_TEXT_LENGTH) &&
                 ((ctxt->options & XML_PARSE_HUGE) == 0)) {
                 xmlSAX2ErrMemory(ctxt, "xmlSAX2Characters: huge text node");
                 return;
             }
-	    if ((size_t)ctxt->nodelen > SIZE_T_MAX - (size_t)len ||
-	        (size_t)ctxt->nodemem + (size_t)len > SIZE_T_MAX / 2) {
-                xmlSAX2ErrMemory(ctxt, "xmlSAX2Characters overflow prevented");
-                return;
-	    }
 	    if (ctxt->nodelen + len >= ctxt->nodemem) {
 		xmlChar *newbuf;
-		size_t size;
+		int size;
 
-		size = ctxt->nodemem + len;
-		size *= 2;
+		size = ctxt->nodemem > INT_MAX - len ?
+                       INT_MAX :
+                       ctxt->nodemem + len;
+		size = size > INT_MAX / 2 ? INT_MAX : size * 2;
                 newbuf = (xmlChar *) xmlRealloc(lastChild->content,size);
 		if (newbuf == NULL) {
 		    xmlSAX2ErrMemory(ctxt, "xmlSAX2Characters");

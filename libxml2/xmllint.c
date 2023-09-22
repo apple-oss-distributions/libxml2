@@ -369,17 +369,14 @@ myMallocFunc(size_t size)
 static void *
 myReallocFunc(void *mem, size_t size)
 {
-    void *ret;
+    size_t oldsize = xmlMemSize(mem);
 
-    ret = xmlMemRealloc(mem, size);
-    if (ret != NULL) {
-        if (xmlMemUsed() > maxmem) {
-            OOM();
-            xmlMemFree(ret);
-            return (NULL);
-        }
+    if (xmlMemUsed() + size - oldsize > (size_t) maxmem) {
+        OOM();
+        return (NULL);
     }
-    return (ret);
+
+    return (xmlMemRealloc(mem, size));
 }
 static char *
 myStrdupFunc(const char *str)
@@ -2865,7 +2862,6 @@ static void parseAndPrintFile(char *filename, xmlParserCtxtPtr rectxt) {
                 xmlFreeDtd(dtd);
                 return;
 	    }
-	    cvp->userData = NULL;
 	    cvp->error    = xmlGenericError;
 	    cvp->warning  = xmlGenericError;
 
@@ -2903,7 +2899,6 @@ static void parseAndPrintFile(char *filename, xmlParserCtxtPtr rectxt) {
 	if ((timing) && (!repeat)) {
 	    startTimer();
 	}
-	cvp->userData = NULL;
 	cvp->error    = xmlGenericError;
 	cvp->warning  = xmlGenericError;
 	if (!xmlValidateDocument(cvp, doc)) {

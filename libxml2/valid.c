@@ -69,9 +69,7 @@ xmlVErrMemory(xmlValidCtxtPtr ctxt, const char *extra)
 	   context */
 	if ((ctxt->finishDtd == XML_CTXT_FINISH_DTD_0) ||
 	    (ctxt->finishDtd == XML_CTXT_FINISH_DTD_1)) {
-	    long delta = (char *) ctxt - (char *) ctxt->userData;
-	    if ((delta > 0) && (delta < 250))
-		pctxt = ctxt->userData;
+	    pctxt = ctxt->userData;
 	}
     }
     if (extra)
@@ -109,9 +107,7 @@ xmlErrValid(xmlValidCtxtPtr ctxt, xmlParserErrors error,
 	   context */
 	if ((ctxt->finishDtd == XML_CTXT_FINISH_DTD_0) ||
 	    (ctxt->finishDtd == XML_CTXT_FINISH_DTD_1)) {
-	    long delta = (char *) ctxt - (char *) ctxt->userData;
-	    if ((delta > 0) && (delta < 250))
-		pctxt = ctxt->userData;
+	    pctxt = ctxt->userData;
 	}
     }
     if (extra)
@@ -159,9 +155,7 @@ xmlErrValidNode(xmlValidCtxtPtr ctxt,
 	   context */
 	if ((ctxt->finishDtd == XML_CTXT_FINISH_DTD_0) ||
 	    (ctxt->finishDtd == XML_CTXT_FINISH_DTD_1)) {
-	    long delta = (char *) ctxt - (char *) ctxt->userData;
-	    if ((delta > 0) && (delta < 250))
-		pctxt = ctxt->userData;
+	    pctxt = ctxt->userData;
 	}
     }
 #pragma clang diagnostic push
@@ -205,9 +199,7 @@ xmlErrValidNodeNr(xmlValidCtxtPtr ctxt,
 	   context */
 	if ((ctxt->finishDtd == XML_CTXT_FINISH_DTD_0) ||
 	    (ctxt->finishDtd == XML_CTXT_FINISH_DTD_1)) {
-	    long delta = (char *) ctxt - (char *) ctxt->userData;
-	    if ((delta > 0) && (delta < 250))
-		pctxt = ctxt->userData;
+	    pctxt = ctxt->userData;
 	}
     }
 #pragma clang diagnostic push
@@ -249,9 +241,7 @@ xmlErrValidWarning(xmlValidCtxtPtr ctxt,
 	   context */
 	if ((ctxt->finishDtd == XML_CTXT_FINISH_DTD_0) ||
 	    (ctxt->finishDtd == XML_CTXT_FINISH_DTD_1)) {
-	    long delta = (char *) ctxt - (char *) ctxt->userData;
-	    if ((delta > 0) && (delta < 250))
-		pctxt = ctxt->userData;
+	    pctxt = ctxt->userData;
 	}
     }
 #pragma clang diagnostic push
@@ -6557,60 +6547,60 @@ name_ok:
  */
 
 int
-xmlValidateElement(xmlValidCtxtPtr ctxt, xmlDocPtr doc, xmlNodePtr elem) {
-    xmlNodePtr child;
+xmlValidateElement(xmlValidCtxtPtr ctxt, xmlDocPtr doc, xmlNodePtr root) {
+    xmlNodePtr elem;
     xmlAttrPtr attr;
     xmlNsPtr ns;
     const xmlChar *value;
     int ret = 1;
 
-    if (elem == NULL) return(0);
-
-    /*
-     * XInclude elements were added after parsing in the infoset,
-     * they don't really mean anything validation wise.
-     */
-    if ((elem->type == XML_XINCLUDE_START) ||
-	(elem->type == XML_XINCLUDE_END) ||
-	(elem->type == XML_NAMESPACE_DECL))
-	return(1);
+    if (root == NULL) return(0);
 
     CHECK_DTD;
 
-    /*
-     * Entities references have to be handled separately
-     */
-    if (elem->type == XML_ENTITY_REF_NODE) {
-	return(1);
+    elem = root;
+    while (1) {
+        ret &= xmlValidateOneElement(ctxt, doc, elem);
+
+        if (elem->type == XML_ELEMENT_NODE) {
+            attr = elem->properties;
+            while (attr != NULL) {
+                value = xmlNodeListGetString(doc, attr->children, 0);
+                ret &= xmlValidateOneAttribute(ctxt, doc, elem, attr, value);
+                if (value != NULL)
+                    xmlFree((char *)value);
+                attr= attr->next;
+            }
+
+            ns = elem->nsDef;
+            while (ns != NULL) {
+                if (elem->ns == NULL)
+                    ret &= xmlValidateOneNamespace(ctxt, doc, elem, NULL,
+                                                   ns, ns->href);
+                else
+                    ret &= xmlValidateOneNamespace(ctxt, doc, elem,
+                                                   elem->ns->prefix, ns,
+                                                   ns->href);
+                ns = ns->next;
+            }
+
+            if (elem->children != NULL) {
+                elem = elem->children;
+                continue;
+            }
+        }
+
+        while (1) {
+            if (elem == root)
+                goto done;
+            if (elem->next != NULL)
+                break;
+            elem = elem->parent;
+        }
+        elem = elem->next;
     }
 
-    ret &= xmlValidateOneElement(ctxt, doc, elem);
-    if (elem->type == XML_ELEMENT_NODE) {
-	attr = elem->properties;
-	while (attr != NULL) {
-	    value = xmlNodeListGetString(doc, attr->children, 0);
-	    ret &= xmlValidateOneAttribute(ctxt, doc, elem, attr, value);
-	    if (value != NULL)
-		xmlFree((char *)value);
-	    attr= attr->next;
-	}
-	ns = elem->nsDef;
-	while (ns != NULL) {
-	    if (elem->ns == NULL)
-		ret &= xmlValidateOneNamespace(ctxt, doc, elem, NULL,
-					       ns, ns->href);
-	    else
-		ret &= xmlValidateOneNamespace(ctxt, doc, elem,
-		                               elem->ns->prefix, ns, ns->href);
-	    ns = ns->next;
-	}
-    }
-    child = elem->children;
-    while (child != NULL) {
-        ret &= xmlValidateElement(ctxt, doc, child);
-        child = child->next;
-    }
-
+done:
     return(ret);
 }
 
