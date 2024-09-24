@@ -48,6 +48,10 @@
 #include <libxml/debugXML.h>
 #endif
 
+#ifdef __APPLE__
+#include <os/log.h>
+#endif
+
 #include "buf.h"
 #include "save.h"
 
@@ -1338,6 +1342,8 @@ xmlStringLenGetNodeList(const xmlDoc *doc, const xmlChar *value, int len) {
 			charval = 0;
 			break;
 		    }
+                    if (charval > 0x110000)
+                        charval = 0x110000;
 		    cur++;
 		    if (cur < end)
 			tmp = *cur;
@@ -1354,7 +1360,6 @@ xmlStringLenGetNodeList(const xmlDoc *doc, const xmlChar *value, int len) {
 		else
 		    tmp = 0;
 		while (tmp != ';') { /* Non input consuming loops */
-                    /* Don't check for integer overflow, see above. */
 		    if ((tmp >= '0') && (tmp <= '9'))
 			charval = charval * 10 + (tmp - '0');
 		    else {
@@ -1363,6 +1368,8 @@ xmlStringLenGetNodeList(const xmlDoc *doc, const xmlChar *value, int len) {
 			charval = 0;
 			break;
 		    }
+                    if (charval > 0x110000)
+                        charval = 0x110000;
 		    cur++;
 		    if (cur < end)
 			tmp = *cur;
@@ -1453,12 +1460,14 @@ xmlStringLenGetNodeList(const xmlDoc *doc, const xmlChar *value, int len) {
 		xmlChar buffer[10];
 		int l;
 
+                if (charval >= 0x110000)
+                    charval = 0xFFFD; /* replacement character */
+
 		l = xmlCopyCharMultiByte(buffer, charval);
 		buffer[l] = 0;
 
 		if (xmlBufCat(buf, buffer))
 		    goto out;
-		charval = 0;
 	    }
 	} else
 	    cur++;
@@ -1547,6 +1556,8 @@ xmlStringGetNodeList(const xmlDoc *doc, const xmlChar *value) {
 			charval = 0;
 			break;
 		    }
+                    if (charval > 0x110000)
+                        charval = 0x110000;
 		    cur++;
 		    tmp = *cur;
 		}
@@ -1557,7 +1568,6 @@ xmlStringGetNodeList(const xmlDoc *doc, const xmlChar *value) {
 		cur += 2;
 		tmp = *cur;
 		while (tmp != ';') { /* Non input consuming loops */
-                    /* Don't check for integer overflow, see above. */
 		    if ((tmp >= '0') && (tmp <= '9'))
 			charval = charval * 10 + (tmp - '0');
 		    else {
@@ -1566,6 +1576,8 @@ xmlStringGetNodeList(const xmlDoc *doc, const xmlChar *value) {
 			charval = 0;
 			break;
 		    }
+                    if (charval > 0x110000)
+                        charval = 0x110000;
 		    cur++;
 		    tmp = *cur;
 		}
@@ -1653,12 +1665,14 @@ xmlStringGetNodeList(const xmlDoc *doc, const xmlChar *value) {
 		xmlChar buffer[10];
 		int len;
 
+                if (charval >= 0x110000)
+                    charval = 0xFFFD; /* replacement character */
+
 		len = xmlCopyCharMultiByte(buffer, charval);
 		buffer[len] = 0;
 
 		if (xmlBufCat(buf, buffer))
 		    goto out;
-		charval = 0;
 	    }
 	} else
 	    cur++;
@@ -4354,6 +4368,14 @@ xmlStaticCopyNode(xmlNodePtr node, xmlDocPtr doc, xmlNodePtr parent,
 	if ((__xmlRegisterCallbacks) && (xmlRegisterNodeDefaultValue))
 	    xmlRegisterNodeDefaultValue((xmlNodePtr)ret);
 
+        /*
+         * Note that since ret->parent is already set, xmlAddChild will
+         * return early and not actually insert the node. It will only
+         * coalesce text nodes and unnecessarily call xmlSetTreeDoc.
+         * Assuming that the subtree to be copied always has its text
+         * nodes coalesced, the somewhat confusing call to xmlAddChild
+         * could be removed.
+         */
         tmp = xmlAddChild(parent, ret);
 	/* node could have coalesced */
 	if (tmp != ret)
@@ -4409,8 +4431,49 @@ xmlStaticCopyNode(xmlNodePtr node, xmlDocPtr doc, xmlNodePtr parent,
 	}
 	ret->last = ret->children;
     } else if ((node->children != NULL) && (extended != 2)) {
-        ret->children = xmlStaticCopyNodeList(node->children, doc, ret);
-	UPDATE_LAST_CHILD_AND_PARENT(ret)
+        xmlNodePtr cur, insert;
+
+        cur = node->children;
+        insert = ret;
+        while (cur != NULL) {
+            xmlNodePtr copy = xmlStaticCopyNode(cur, doc, insert, 2);
+            if (copy == NULL) {
+                xmlFreeNode(ret);
+                return(NULL);
+            }
+
+            /* Check for coalesced text nodes */
+            if (insert->last != copy) {
+                if (insert->last == NULL) {
+                    insert->children = copy;
+                } else {
+                    copy->prev = insert->last;
+                    insert->last->next = copy;
+                }
+                insert->last = copy;
+            }
+
+            if ((cur->type != XML_ENTITY_REF_NODE) &&
+                (cur->children != NULL)) {
+                cur = cur->children;
+                insert = copy;
+                continue;
+            }
+
+            while (1) {
+                if (cur->next != NULL) {
+                    cur = cur->next;
+                    break;
+                }
+
+                cur = cur->parent;
+                insert = insert->parent;
+                if (cur == node) {
+                    cur = NULL;
+                    break;
+                }
+            }
+        }
     }
 
 out:
@@ -4425,29 +4488,28 @@ static xmlNodePtr
 xmlStaticCopyNodeList(xmlNodePtr node, xmlDocPtr doc, xmlNodePtr parent) {
     xmlNodePtr ret = NULL;
     xmlNodePtr p = NULL,q;
+    xmlDtdPtr newSubset = NULL;
 
     while (node != NULL) {
-#ifdef LIBXML_TREE_ENABLED
 	if (node->type == XML_DTD_NODE ) {
-	    if (doc == NULL) {
+#ifdef LIBXML_TREE_ENABLED
+	    if ((doc == NULL) || (doc->intSubset != NULL)) {
 		node = node->next;
 		continue;
 	    }
-	    if (doc->intSubset == NULL) {
-		q = (xmlNodePtr) xmlCopyDtd( (xmlDtdPtr) node );
-		if (q == NULL) return(NULL);
-		q->doc = doc;
-		q->parent = parent;
-		doc->intSubset = (xmlDtdPtr) q;
-		xmlAddChild(parent, q);
-	    } else {
-		q = (xmlNodePtr) doc->intSubset;
-		xmlAddChild(parent, q);
-	    }
-	} else
+            q = (xmlNodePtr) xmlCopyDtd( (xmlDtdPtr) node );
+            if (q == NULL) goto error;
+            q->doc = doc;
+            q->parent = parent;
+            newSubset = (xmlDtdPtr) q;
+#else
+            node = node->next;
+            continue;
 #endif /* LIBXML_TREE_ENABLED */
+	} else {
 	    q = xmlStaticCopyNode(node, doc, parent, 1);
-	if (q == NULL) return(NULL);
+	    if (q == NULL) goto error;
+        }
 	if (ret == NULL) {
 	    q->prev = NULL;
 	    ret = p = q;
@@ -4459,7 +4521,12 @@ xmlStaticCopyNodeList(xmlNodePtr node, xmlDocPtr doc, xmlNodePtr parent) {
 	}
 	node = node->next;
     }
+    if (newSubset != NULL)
+        doc->intSubset = newSubset;
     return(ret);
+error:
+    xmlFreeNodeList(ret);
+    return(NULL);
 }
 
 /**
@@ -7159,7 +7226,7 @@ xmlBufferPtr
 xmlBufferCreateSize(size_t size) {
     xmlBufferPtr ret;
 
-    if (size >= UINT_MAX)
+    if (size >= INT_MAX)
         return(NULL);
     ret = (xmlBufferPtr) xmlMalloc(sizeof(xmlBuffer));
     if (ret == NULL) {
@@ -7228,7 +7295,7 @@ xmlBufferCreateStatic(void *mem, size_t size) {
 
     if ((mem == NULL) || (size == 0))
         return(NULL);
-    if (size > UINT_MAX)
+    if (size > INT_MAX)
         return(NULL);
 
     ret = (xmlBufferPtr) xmlMalloc(sizeof(xmlBuffer));
@@ -7395,16 +7462,16 @@ xmlBufferGrow(xmlBufferPtr buf, unsigned int len) {
         buf->content[buf->use + len] = 0;
         return(0);
     }
-    if (len > UINT_MAX - buf->use - 1) {
-        xmlTreeErrMemory("growing buffer past UINT_MAX");
+    if (len > INT_MAX - buf->use - 1) {
+        xmlTreeErrMemory("growing buffer past INT_MAX");
         return(-1);
     }
 
     if (buf->size > (size_t) len) {
-        size = buf->size > UINT_MAX / 2 ? UINT_MAX : buf->size * 2;
+        size = buf->size > INT_MAX / 2 ? INT_MAX : buf->size * 2;
     } else {
         size = buf->use + len;
-        size = size > UINT_MAX - 100 ? UINT_MAX : size + 100;
+        size = size > INT_MAX - 100 ? INT_MAX : size + 100;
     }
 
     if ((buf->alloc == XML_BUFFER_ALLOC_IO) && (buf->contentIO != NULL)) {
@@ -7496,7 +7563,14 @@ xmlBufferLength(const xmlBuffer *buf)
     if(!buf)
         return 0;
 
-    return buf->use;
+    if (buf->use >= INT_MAX) {
+#ifdef __APPLE__
+        os_log_error(OS_LOG_DEFAULT, "xmlBufferLength() int overflow: %{public}u", buf->use);
+#endif
+        return (INT_MAX - 1);
+    }
+
+    return (int)buf->use;
 }
 
 /**
@@ -7524,8 +7598,8 @@ xmlBufferResize(xmlBufferPtr buf, unsigned int size)
     if (size < buf->size)
         return 1;
 
-    if (size > UINT_MAX - 10) {
-        xmlTreeErrMemory("growing buffer past UINT_MAX");
+    if (size > INT_MAX - 10) {
+        xmlTreeErrMemory("growing buffer past INT_MAX");
         return 0;
     }
 
@@ -7535,11 +7609,11 @@ xmlBufferResize(xmlBufferPtr buf, unsigned int size)
 	case XML_BUFFER_ALLOC_DOUBLEIT:
 	    /*take care of empty case*/
             if (buf->size == 0)
-                newSize = (size > UINT_MAX - 10 ? UINT_MAX : size + 10);
+                newSize = (size > INT_MAX - 10 ? INT_MAX : size + 10);
             else
                 newSize = buf->size;
 	    while (size > newSize) {
-	        if (newSize > UINT_MAX / 2) {
+	        if (newSize > INT_MAX / 2) {
 	            xmlTreeErrMemory("growing buffer");
 	            return 0;
 	        }
@@ -7547,7 +7621,7 @@ xmlBufferResize(xmlBufferPtr buf, unsigned int size)
 	    }
 	    break;
 	case XML_BUFFER_ALLOC_EXACT:
-	    newSize = (size > UINT_MAX - 10 ? UINT_MAX : size + 10);
+	    newSize = (size > INT_MAX - 10 ? INT_MAX : size + 10);
 	    break;
         case XML_BUFFER_ALLOC_HYBRID:
             if (buf->use < BASE_BUFFER_SIZE)
@@ -7555,7 +7629,7 @@ xmlBufferResize(xmlBufferPtr buf, unsigned int size)
             else {
                 newSize = buf->size;
                 while (size > newSize) {
-                    if (newSize > UINT_MAX / 2) {
+                    if (newSize > INT_MAX / 2) {
                         xmlTreeErrMemory("growing buffer");
                         return 0;
                     }
@@ -7565,7 +7639,7 @@ xmlBufferResize(xmlBufferPtr buf, unsigned int size)
             break;
 
 	default:
-	    newSize = (size > UINT_MAX - 10 ? UINT_MAX : size + 10);
+	    newSize = (size > INT_MAX - 10 ? INT_MAX : size + 10);
 	    break;
     }
 
@@ -7652,8 +7726,8 @@ xmlBufferAdd(xmlBufferPtr buf, const xmlChar *str, int len) {
 
     /* Note that both buf->size and buf->use can be zero here. */
     if ((unsigned) len >= buf->size - buf->use) {
-        if ((unsigned) len >= UINT_MAX - buf->use) {
-            xmlTreeErrMemory("growing buffer past UINT_MAX");
+        if ((unsigned) len >= INT_MAX - buf->use) {
+            xmlTreeErrMemory("growing buffer past INT_MAX");
             return XML_ERR_NO_MEMORY;
         }
         needSize = buf->use + len + 1;
@@ -7726,8 +7800,8 @@ xmlBufferAddHead(xmlBufferPtr buf, const xmlChar *str, int len) {
     }
     /* Note that both buf->size and buf->use can be zero here. */
     if ((unsigned) len >= buf->size - buf->use) {
-        if ((unsigned) len >= UINT_MAX - buf->use) {
-            xmlTreeErrMemory("growing buffer past UINT_MAX");
+        if ((unsigned) len >= INT_MAX - buf->use) {
+            xmlTreeErrMemory("growing buffer past INT_MAX");
             return(-1);
         }
         needSize = buf->use + len + 1;
@@ -8293,23 +8367,20 @@ static int
 xmlDOMWrapNSNormAddNsMapItem2(xmlNsPtr **list, int *size, int *number,
 			xmlNsPtr oldNs, xmlNsPtr newNs)
 {
-    if (*list == NULL) {
-	*list = (xmlNsPtr *) xmlMalloc(6 * sizeof(xmlNsPtr));
-	if (*list == NULL) {
-	    xmlTreeErrMemory("alloc ns map item");
-	    return(-1);
-	}
-	*size = 3;
-	*number = 0;
-    } else if ((*number) >= (*size)) {
-	*size *= 2;
-	*list = (xmlNsPtr *) xmlRealloc(*list,
-	    (*size) * 2 * sizeof(xmlNsPtr));
-	if (*list == NULL) {
-	    xmlTreeErrMemory("realloc ns map item");
-	    return(-1);
-	}
+    if (*number >= *size) {
+        xmlNsPtr *tmp;
+        size_t newSize;
+
+        newSize = *size ? *size * 2 : 3;
+        tmp = xmlRealloc(*list, newSize * 2 * sizeof(tmp[0]));
+        if (tmp == NULL) {
+            xmlTreeErrMemory("realloc ns map item");
+            return(-1);
+        }
+        *list = tmp;
+        *size = newSize;
     }
+
     (*list)[2 * (*number)] = oldNs;
     (*list)[2 * (*number) +1] = newNs;
     (*number)++;
@@ -8338,7 +8409,7 @@ xmlDOMWrapRemoveNode(xmlDOMWrapCtxtPtr ctxt, xmlDocPtr doc,
 		     xmlNodePtr node, int options ATTRIBUTE_UNUSED)
 {
     xmlNsPtr *list = NULL;
-    int sizeList, nbList = 0, i, j;
+    int sizeList = 0, nbList = 0, ret = 0, i, j;
     xmlNsPtr ns;
 
     if ((node == NULL) || (doc == NULL) || (node->doc != doc))
@@ -8374,7 +8445,7 @@ xmlDOMWrapRemoveNode(xmlDOMWrapCtxtPtr ctxt, xmlDocPtr doc,
 		    do {
 			if (xmlDOMWrapNSNormAddNsMapItem2(&list, &sizeList,
 			    &nbList, ns, ns) == -1)
-			    goto internal_error;
+			    ret = -1;
 			ns = ns->next;
 		    } while (ns != NULL);
 		}
@@ -8404,7 +8475,7 @@ xmlDOMWrapRemoveNode(xmlDOMWrapCtxtPtr ctxt, xmlDocPtr doc,
 			ns = xmlDOMWrapStoreNs(doc, node->ns->href,
 			    node->ns->prefix);
 			if (ns == NULL)
-			    goto internal_error;
+			    ret = -1;
 		    }
 		    if (ns != NULL) {
 			/*
@@ -8412,7 +8483,7 @@ xmlDOMWrapRemoveNode(xmlDOMWrapCtxtPtr ctxt, xmlDocPtr doc,
 			*/
 			if (xmlDOMWrapNSNormAddNsMapItem2(&list, &sizeList,
 			    &nbList, node->ns, ns) == -1)
-			    goto internal_error;
+			    ret = -1;
 		    }
 		    node->ns = ns;
 		}
@@ -8444,12 +8515,7 @@ next_sibling:
 
     if (list != NULL)
 	xmlFree(list);
-    return (0);
-
-internal_error:
-    if (list != NULL)
-	xmlFree(list);
-    return (-1);
+    return (ret);
 }
 
 /*
@@ -8870,7 +8936,7 @@ xmlDOMWrapReconcileNamespaces(xmlDOMWrapCtxtPtr ctxt ATTRIBUTE_UNUSED,
     int optRemoveRedundantNS =
 	((xmlDOMReconcileNSOptions) options & XML_DOM_RECONNS_REMOVEREDUND) ? 1 : 0;
     xmlNsPtr *listRedund = NULL;
-    int sizeRedund = 0, nbRedund = 0, ret, i, j;
+    int sizeRedund = 0, nbRedund = 0, ret = 0, i, j;
 
     if ((elem == NULL) || (elem->doc == NULL) ||
 	(elem->type != XML_ELEMENT_NODE))
@@ -8899,7 +8965,7 @@ xmlDOMWrapReconcileNamespaces(xmlDOMWrapCtxtPtr ctxt ATTRIBUTE_UNUSED,
 				*/
 				if (xmlDOMWrapNSNormGatherInScopeNs(&nsMap,
 				    elem->parent) == -1)
-				    goto internal_error;
+				    ret = -1;
 			    }
 			    parnsdone = 1;
 			}
@@ -8921,16 +8987,18 @@ xmlDOMWrapReconcileNamespaces(xmlDOMWrapCtxtPtr ctxt ATTRIBUTE_UNUSED,
 				    * Add it to the list of redundant ns-decls.
 				    */
 				    if (xmlDOMWrapNSNormAddNsMapItem2(&listRedund,
-					&sizeRedund, &nbRedund, ns, mi->newNs) == -1)
-					goto internal_error;
-				    /*
-				    * Remove the ns-decl from the element-node.
-				    */
-				    if (prevns)
-					prevns->next = ns->next;
-				    else
-					cur->nsDef = ns->next;
-				    goto next_ns_decl;
+					&sizeRedund, &nbRedund, ns, mi->newNs) == -1) {
+					ret = -1;
+                                    } else {
+                                        /*
+                                        * Remove the ns-decl from the element-node.
+                                        */
+                                        if (prevns)
+                                            prevns->next = ns->next;
+                                        else
+                                            cur->nsDef = ns->next;
+                                        goto next_ns_decl;
+                                    }
 				}
 			    }
 			}
@@ -8960,7 +9028,7 @@ xmlDOMWrapReconcileNamespaces(xmlDOMWrapCtxtPtr ctxt ATTRIBUTE_UNUSED,
 			*/
 			if (xmlDOMWrapNsMapAddItem(&nsMap, -1, ns, ns,
 			    depth) == NULL)
-			    goto internal_error;
+			    ret = -1;
 
 			prevns = ns;
 next_ns_decl:
@@ -8980,7 +9048,7 @@ next_ns_decl:
 			((xmlNodePtr) elem->parent->doc != elem->parent)) {
 			if (xmlDOMWrapNSNormGatherInScopeNs(&nsMap,
 				elem->parent) == -1)
-			    goto internal_error;
+			    ret = -1;
 		    }
 		    parnsdone = 1;
 		}
@@ -9019,7 +9087,7 @@ next_ns_decl:
 			&nsMap, depth,
 			ancestorsOnly,
 			(cur->type == XML_ATTRIBUTE_NODE) ? 1 : 0) == -1)
-		    goto internal_error;
+		    ret = -1;
 		cur->ns = ns;
 
 ns_end:
@@ -9079,11 +9147,6 @@ next_sibling:
 	}
     } while (cur != NULL);
 
-    ret = 0;
-    goto exit;
-internal_error:
-    ret = -1;
-exit:
     if (listRedund) {
 	for (i = 0, j = 0; i < nbRedund; i++, j += 2) {
 	    xmlFreeNs(listRedund[j]);
@@ -9164,8 +9227,6 @@ xmlDOMWrapAdoptBranch(xmlDOMWrapCtxtPtr ctxt,
 	parnsdone = 0;
 
     cur = node;
-    if ((cur != NULL) && (cur->type == XML_NAMESPACE_DECL))
-	goto internal_error;
 
     while (cur != NULL) {
 	/*
@@ -9197,7 +9258,8 @@ xmlDOMWrapAdoptBranch(xmlDOMWrapCtxtPtr ctxt,
 		/*
 		* TODO
 		*/
-		return (-1);
+		ret = -1;
+                goto leave_node;
 	    case XML_ELEMENT_NODE:
 		curElem = cur;
 		depth++;
@@ -9218,7 +9280,7 @@ xmlDOMWrapAdoptBranch(xmlDOMWrapCtxtPtr ctxt,
 			*/
 			if (xmlDOMWrapNSNormGatherInScopeNs(&nsMap,
 			    destParent) == -1)
-			    goto internal_error;
+			    ret = -1;
 			parnsdone = 1;
 		    }
 		    for (ns = cur->nsDef; ns != NULL; ns = ns->next) {
@@ -9247,7 +9309,7 @@ xmlDOMWrapAdoptBranch(xmlDOMWrapCtxtPtr ctxt,
 			*/
 			if (xmlDOMWrapNsMapAddItem(&nsMap, -1,
 			    ns, ns, depth) == NULL)
-			    goto internal_error;
+			    ret = -1;
 		    }
 		}
                 /* Falls through. */
@@ -9259,7 +9321,7 @@ xmlDOMWrapAdoptBranch(xmlDOMWrapCtxtPtr ctxt,
 		if (! parnsdone) {
 		    if (xmlDOMWrapNSNormGatherInScopeNs(&nsMap,
 			destParent) == -1)
-			goto internal_error;
+			ret = -1;
 		    parnsdone = 1;
 		}
 		/*
@@ -9293,7 +9355,7 @@ xmlDOMWrapAdoptBranch(xmlDOMWrapCtxtPtr ctxt,
 		    */
 		    if (xmlDOMWrapNsMapAddItem(&nsMap, -1,
 			    cur->ns, ns, XML_TREE_NSMAP_CUSTOM) == NULL)
-			goto internal_error;
+			ret = -1;
 		    cur->ns = ns;
 		} else {
 		    /*
@@ -9307,7 +9369,7 @@ xmlDOMWrapAdoptBranch(xmlDOMWrapCtxtPtr ctxt,
 			ancestorsOnly,
 			/* ns-decls must be prefixed for attributes. */
 			(cur->type == XML_ATTRIBUTE_NODE) ? 1 : 0) == -1)
-			goto internal_error;
+			ret = -1;
 		    cur->ns = ns;
 		}
 ns_end:
@@ -9378,7 +9440,7 @@ ns_end:
 	    case XML_COMMENT_NODE:
 		break;
 	    default:
-		goto internal_error;
+		ret = -1;
 	}
 	/*
 	* Walk the tree.
@@ -9429,12 +9491,6 @@ leave_node:
 	}
     }
 
-    goto exit;
-
-internal_error:
-    ret = -1;
-
-exit:
     /*
     * Cleanup.
     */
@@ -9514,7 +9570,8 @@ xmlDOMWrapCloneNode(xmlDOMWrapCtxtPtr ctxt,
     xmlNsPtr cloneNs = NULL, *cloneNsDefSlot = NULL;
     xmlDictPtr dict; /* The destination dict */
 
-    if ((node == NULL) || (resNode == NULL) || (destDoc == NULL))
+    if ((node == NULL) || (resNode == NULL) || (destDoc == NULL) ||
+	((destParent != NULL) && (destParent->doc != destDoc)))
 	return(-1);
     /*
     * TODO: Initially we support only element-nodes.
@@ -10021,7 +10078,7 @@ xmlDOMWrapAdoptAttr(xmlDOMWrapCtxtPtr ctxt,
 		    int options ATTRIBUTE_UNUSED)
 {
     xmlNodePtr cur;
-    int adoptStr = 1;
+    int adoptStr = 1, ret = 0;
 
     if ((attr == NULL) || (destDoc == NULL))
 	return (-1);
@@ -10047,14 +10104,14 @@ xmlDOMWrapAdoptAttr(xmlDOMWrapCtxtPtr ctxt,
 	    */
 	    if (xmlSearchNsByNamespaceStrict(destDoc, destParent, attr->ns->href,
 		&ns, 1) == -1)
-		goto internal_error;
+		ret = -1;
 	    if (ns == NULL) {
 		ns = xmlDOMWrapNSNormDeclareNsForced(destDoc, destParent,
 		    attr->ns->href, attr->ns->prefix, 1);
 	    }
 	}
 	if (ns == NULL)
-	    goto internal_error;
+	    ret = -1;
 	attr->ns = ns;
     }
 
@@ -10065,10 +10122,10 @@ xmlDOMWrapAdoptAttr(xmlDOMWrapCtxtPtr ctxt,
     * Walk content.
     */
     if (attr->children == NULL)
-	return (0);
+	return (ret);
     cur = attr->children;
     if ((cur != NULL) && (cur->type == XML_NAMESPACE_DECL))
-        goto internal_error;
+        ret = -1;
     while (cur != NULL) {
 	cur->doc = destDoc;
 	switch (cur->type) {
@@ -10113,9 +10170,8 @@ next_sibling:
 	    goto next_sibling;
 	}
     }
-    return (0);
-internal_error:
-    return (-1);
+
+    return (ret);
 }
 
 /*

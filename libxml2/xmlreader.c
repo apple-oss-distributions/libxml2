@@ -935,9 +935,7 @@ xmlTextReaderPushData(xmlTextReaderPtr reader) {
 		} else if (val < 0) {
 		    reader->mode = XML_TEXTREADER_MODE_EOF;
 		    reader->state = oldstate;
-		    if ((oldstate != XML_TEXTREADER_START) ||
-			(reader->ctxt->myDoc != NULL))
-			return(val);
+		    return(val);
 		} else if (val == 0) {
 		    /* mark the end of the stream and process the remains */
 		    reader->mode = XML_TEXTREADER_MODE_EOF;
@@ -1586,6 +1584,7 @@ node_found:
      * Handle XInclude if asked for
      */
     if ((reader->xinclude) && (reader->in_xinclude == 0) &&
+        (reader->state != XML_TEXTREADER_BACKTRACK) &&
         (reader->node != NULL) &&
 	(reader->node->type == XML_ELEMENT_NODE) &&
 	(reader->node->ns != NULL) &&

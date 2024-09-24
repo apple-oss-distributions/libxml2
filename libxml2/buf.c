@@ -1198,12 +1198,19 @@ xmlBufBackToBuffer(xmlBufPtr buf) {
     if (buf == NULL)
         return(NULL);
     CHECK_COMPAT(buf)
-    if ((buf->error) || (buf->buffer == NULL)) {
+    ret = buf->buffer;
+
+    if ((buf->error) || (ret == NULL)) {
         xmlBufFree(buf);
+        if (ret != NULL) {
+            ret->content = NULL;
+            ret->contentIO = NULL;
+            ret->use = 0;
+            ret->size = 0;
+        }
         return(NULL);
     }
 
-    ret = buf->buffer;
     /*
      * What to do in case of error in the buffer ???
      */
@@ -1274,8 +1281,12 @@ xmlBufMergeBuffer(xmlBufPtr buf, xmlBufferPtr buffer) {
  */
 int
 xmlBufResetInput(xmlBufPtr buf, xmlParserInputPtr input) {
-    if ((input == NULL) || (buf == NULL) || (buf->error))
+    if (input == NULL)
         return(-1);
+    if ((buf == NULL) || (buf->error)) {
+        input->base = input->cur = input->end = BAD_CAST "";
+        return(-1);
+    }
     CHECK_COMPAT(buf)
     input->base = input->cur = buf->content;
     input->end = &buf->content[buf->use];
@@ -1296,7 +1307,7 @@ xmlBufGetInputBase(xmlBufPtr buf, xmlParserInputPtr input) {
     size_t base;
 
     if ((input == NULL) || (buf == NULL) || (buf->error))
-        return(-1);
+        return(0);
     CHECK_COMPAT(buf)
     base = input->base - buf->content;
     /*

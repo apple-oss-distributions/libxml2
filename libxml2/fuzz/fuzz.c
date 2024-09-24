@@ -108,13 +108,52 @@ xmlFuzzDataCleanup(void) {
 }
 
 /**
+ * xmlFuzzReadBytes:
+ * @size:   size of buffer in bytes
+ * @stopByte: stop value
+ *
+ * Read a random-length buffer from the fuzz data.
+ *
+ * The format is similar to libFuzzer's FuzzedDataProvider but treats
+ * @stopByte as the end of the buffer.
+ *
+ * Returns a buffer of length @size or NULL if the fuzz data is exhausted.
+ */
+const char *
+xmlFuzzReadBytes(size_t *size, char stopByte) {
+    const char *out = fuzzData.outPtr;
+
+    while (fuzzData.remaining > 0) {
+        int c = *fuzzData.ptr++;
+        fuzzData.remaining--;
+
+        if ((c == stopByte) && (fuzzData.remaining > 0)) {
+            fuzzData.ptr++;
+            fuzzData.remaining--;
+            *size = fuzzData.outPtr - out;
+            return(out);
+        }
+
+        *fuzzData.outPtr++ = c;
+    }
+
+    if (fuzzData.outPtr > out) {
+        *size = fuzzData.outPtr - out;
+        return(out);
+    }
+
+    *size = 0;
+    return(NULL);
+}
+
+/**
  * xmlFuzzReadInt:
  * @size:  size of string in bytes
  *
  * Read an integer from the fuzz data.
  */
 int
-xmlFuzzReadInt() {
+xmlFuzzReadInt(void) {
     int ret;
 
     if (fuzzData.remaining < sizeof(int))
@@ -349,6 +388,18 @@ xmlFuzzExtractStrings(const char *data, size_t size, char **strings,
     return(ret);
 }
 
+static unsigned int _rndSeed;
+
+unsigned int
+xmlFuzzRnd(void) {
+    return _rndSeed = (unsigned int)((_rndSeed * 48271UL) % 2147483647UL);  /* C++ std::minstd_rand */
+}
+
+void
+xmlFuzzRndSetSeed(unsigned int seed) {
+    _rndSeed = seed;
+}
+
 char *
 xmlSlurpFile(const char *path, size_t *sizeRet) {
     FILE *file;
@@ -377,4 +428,3 @@ xmlSlurpFile(const char *path, size_t *sizeRet) {
 
     return(data);
 }
-

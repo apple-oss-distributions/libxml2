@@ -52,6 +52,11 @@
 #endif
 #endif
 
+// For use of uint64_t in HAVE_MMAP.
+#ifdef HAVE_STDINT_H
+#include <stdint.h>
+#endif
+
 #ifndef MAP_RESILIENT_MEDIA
 /*
  * Apple extension to allow reading past the end of an mmap-ped file without crashing.
@@ -610,7 +615,7 @@ xmlHTMLPrintFileContext(xmlParserInputPtr input) {
     len = strlen(buffer);
     snprintf(&buffer[len], sizeof(buffer) - len, "\n");
     cur = input->cur;
-    while ((*cur == '\n') || (*cur == '\r'))
+    while ((cur > base) && ((*cur == '\n') || (*cur == '\r')))
 	cur--;
     n = 0;
     while ((cur != base) && (n++ < 80)) {
@@ -2341,8 +2346,8 @@ static void parseAndPrintFile(char *filename, xmlParserCtxtPtr rectxt) {
 	    }
 	    if (f != NULL) {
 		int ret;
-	        int res, size = 1024;
-	        char chars[1024];
+	        int res;
+	        char chars[4096];
                 xmlParserCtxtPtr ctxt;
 
 		/* if (repeat) size = 1024; */
@@ -2359,7 +2364,7 @@ static void parseAndPrintFile(char *filename, xmlParserCtxtPtr rectxt) {
 		    xmlCtxtUseOptions(ctxt, options);
                     if (push_structured_error_fatal_stop)
                         xmlSetStructuredErrorFunc(ctxt, pushStructuredErrorFunc);
-		    while ((res = fread(chars, 1, size, f)) > 0) {
+		    while ((res = fread(chars, 1, pushsize, f)) > 0) {
 			xmlParseChunk(ctxt, chars, res, 0);
 		    }
 		    xmlParseChunk(ctxt, chars, 0, 1);
