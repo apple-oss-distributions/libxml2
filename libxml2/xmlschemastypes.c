@@ -324,8 +324,11 @@ xmlSchemaInitBasicType(const char *name, xmlSchemaValType type,
 	    ret->flags |= XML_SCHEMAS_TYPE_VARIETY_ATOMIC;
 	    break;
     }
-    xmlHashAddEntry2(xmlSchemaTypesBank, ret->name,
-	             XML_SCHEMAS_NAMESPACE_NAME, ret);
+    if (xmlHashAddEntry2(xmlSchemaTypesBank, ret->name,
+                     XML_SCHEMAS_NAMESPACE_NAME, ret) < 0) {
+        xmlSchemaFreeType(ret);
+        return(NULL);
+    }
     ret->builtInType = type;
     return(ret);
 }
@@ -642,13 +645,20 @@ xmlSchemaCleanupTypes(void) {
 	xmlSchemaFreeWildcard(xmlSchemaTypeAnyTypeDef->attributeWildcard);
 	/* Content type. */
 	particle = (xmlSchemaParticlePtr) xmlSchemaTypeAnyTypeDef->subtypes;
-	/* Wildcard. */
-	xmlSchemaFreeWildcard((xmlSchemaWildcardPtr)
-	    particle->children->children->children);
-	xmlFree((xmlSchemaParticlePtr) particle->children->children);
-	/* Sequence model group. */
-	xmlFree((xmlSchemaModelGroupPtr) particle->children);
-	xmlFree((xmlSchemaParticlePtr) particle);
+        if (particle != NULL) {
+            if (particle->children != NULL) {
+                if (particle->children->children != NULL) {
+                    /* Wildcard. */
+                    xmlSchemaFreeWildcard((xmlSchemaWildcardPtr)
+                        particle->children->children->children);
+                    xmlFree((xmlSchemaParticlePtr)
+                        particle->children->children);
+                }
+                /* Sequence model group. */
+                xmlFree((xmlSchemaModelGroupPtr) particle->children);
+            }
+            xmlFree((xmlSchemaParticlePtr) particle);
+        }
 	xmlSchemaTypeAnyTypeDef->subtypes = NULL;
     }
     xmlHashFree(xmlSchemaTypesBank, xmlSchemaFreeTypeEntry);
@@ -2002,6 +2012,8 @@ xmlSchemaWhiteSpaceReplace(const xmlChar *value) {
     if (*cur == 0)
 	return (NULL);
     ret = xmlStrdup(value);
+    if (ret == NULL)
+        return(NULL);
     /* TODO FIXME: I guess gcc will bark at this. */
     mcur = (xmlChar *)  (ret + (cur - value));
     do {
@@ -2867,7 +2879,7 @@ xmlSchemaValAtomicType(xmlSchemaTypePtr type, const xmlChar * value,
                 /*
                  * NOTE: the IDness might have already be declared in the DTD
                  */
-                if (attr->atype != XML_ATTRIBUTE_ID) {
+                if (XML_ATTR_GET_ATYPE(attr) != XML_ATTRIBUTE_ID) {
                     xmlIDPtr res;
                     xmlChar *strip;
 
@@ -2880,7 +2892,7 @@ xmlSchemaValAtomicType(xmlSchemaTypePtr type, const xmlChar * value,
                     if (res == NULL) {
                         ret = 2;
                     } else {
-                        attr->atype = XML_ATTRIBUTE_ID;
+			XML_ATTR_SET_ATYPE(attr, XML_ATTRIBUTE_ID);
                     }
                 }
             }
@@ -2905,7 +2917,7 @@ xmlSchemaValAtomicType(xmlSchemaTypePtr type, const xmlChar * value,
                     xmlFree(strip);
                 } else
                     xmlAddRef(NULL, node->doc, value, attr);
-                attr->atype = XML_ATTRIBUTE_IDREF;
+                XML_ATTR_SET_ATYPE(attr, XML_ATTRIBUTE_IDREF);
             }
             goto done;
         case XML_SCHEMAS_IDREFS:
@@ -2919,7 +2931,7 @@ xmlSchemaValAtomicType(xmlSchemaTypePtr type, const xmlChar * value,
                 (node->type == XML_ATTRIBUTE_NODE)) {
                 xmlAttrPtr attr = (xmlAttrPtr) node;
 
-                attr->atype = XML_ATTRIBUTE_IDREFS;
+                XML_ATTR_SET_ATYPE(attr, XML_ATTRIBUTE_IDREFS);
             }
             goto done;
         case XML_SCHEMAS_ENTITY:{
@@ -2950,7 +2962,7 @@ xmlSchemaValAtomicType(xmlSchemaTypePtr type, const xmlChar * value,
                     (node->type == XML_ATTRIBUTE_NODE)) {
                     xmlAttrPtr attr = (xmlAttrPtr) node;
 
-                    attr->atype = XML_ATTRIBUTE_ENTITY;
+                    XML_ATTR_SET_ATYPE(attr, XML_ATTRIBUTE_ENTITY);
                 }
                 goto done;
             }
@@ -2967,7 +2979,7 @@ xmlSchemaValAtomicType(xmlSchemaTypePtr type, const xmlChar * value,
                 (node->type == XML_ATTRIBUTE_NODE)) {
                 xmlAttrPtr attr = (xmlAttrPtr) node;
 
-                attr->atype = XML_ATTRIBUTE_ENTITIES;
+                XML_ATTR_SET_ATYPE(attr, XML_ATTRIBUTE_ENTITIES);
             }
             goto done;
         case XML_SCHEMAS_NOTATION:{
@@ -3805,8 +3817,7 @@ xmlSchemaCopyValue(xmlSchemaValPtr val)
 	    case XML_SCHEMAS_IDREFS:
 	    case XML_SCHEMAS_ENTITIES:
 	    case XML_SCHEMAS_NMTOKENS:
-		xmlSchemaFreeValue(ret);
-		return (NULL);
+                goto error;
 	    case XML_SCHEMAS_ANYSIMPLETYPE:
 	    case XML_SCHEMAS_STRING:
 	    case XML_SCHEMAS_NORMSTRING:
@@ -3820,12 +3831,16 @@ xmlSchemaCopyValue(xmlSchemaValPtr val)
 	    case XML_SCHEMAS_NMTOKEN:
 	    case XML_SCHEMAS_ANYURI:
 		cur = xmlSchemaDupVal(val);
+                if (cur == NULL)
+                    goto error;
 		if (val->value.str != NULL)
 		    cur->value.str = xmlStrdup(BAD_CAST val->value.str);
 		break;
 	    case XML_SCHEMAS_QNAME:
 	    case XML_SCHEMAS_NOTATION:
 		cur = xmlSchemaDupVal(val);
+                if (cur == NULL)
+                    goto error;
 		if (val->value.qname.name != NULL)
 		    cur->value.qname.name =
                     xmlStrdup(BAD_CAST val->value.qname.name);
@@ -3835,17 +3850,23 @@ xmlSchemaCopyValue(xmlSchemaValPtr val)
 		break;
 	    case XML_SCHEMAS_HEXBINARY:
 		cur = xmlSchemaDupVal(val);
+                if (cur == NULL)
+                    goto error;
 		if (val->value.hex.str != NULL)
 		    cur->value.hex.str = xmlStrdup(BAD_CAST val->value.hex.str);
 		break;
 	    case XML_SCHEMAS_BASE64BINARY:
 		cur = xmlSchemaDupVal(val);
+                if (cur == NULL)
+                    goto error;
 		if (val->value.base64.str != NULL)
 		    cur->value.base64.str =
                     xmlStrdup(BAD_CAST val->value.base64.str);
 		break;
 	    default:
 		cur = xmlSchemaDupVal(val);
+                if (cur == NULL)
+                    goto error;
 		break;
 	}
 	if (ret == NULL)
@@ -3856,6 +3877,10 @@ xmlSchemaCopyValue(xmlSchemaValPtr val)
 	val = val->next;
     }
     return (ret);
+
+error:
+    xmlSchemaFreeValue(ret);
+    return (NULL);
 }
 
 /**
@@ -4043,10 +4068,11 @@ xmlSchemaDateNormalize (xmlSchemaValPtr dt, double offset)
     dur->value.date.sec -= offset;
 
     ret = _xmlSchemaDateAdd(dt, dur);
-    if (ret == NULL)
-        return NULL;
 
     xmlSchemaFreeValue(dur);
+
+    if (ret == NULL)
+        return NULL;
 
     /* ret->value.date.tzo = 0; */
     return ret;

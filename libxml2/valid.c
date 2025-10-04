@@ -27,6 +27,8 @@
 #include <libxml/list.h>
 #include <libxml/globals.h>
 
+#include <private/memory.h>
+
 static xmlElementPtr xmlGetDtdElementDesc2(xmlDtdPtr dtd, const xmlChar *name,
 	                           int create);
 /* #define DEBUG_VALID_ALGO */
@@ -275,27 +277,23 @@ typedef struct _xmlValidState {
 
 static int
 vstateVPush(xmlValidCtxtPtr ctxt, xmlElementPtr elemDecl, xmlNodePtr node) {
-    if ((ctxt->vstateMax == 0) || (ctxt->vstateTab == NULL)) {
-	ctxt->vstateMax = 10;
-	ctxt->vstateTab = (xmlValidState *) xmlMalloc(ctxt->vstateMax *
-		              sizeof(ctxt->vstateTab[0]));
-        if (ctxt->vstateTab == NULL) {
-	    xmlVErrMemory(ctxt, "malloc failed");
-	    return(-1);
-	}
-    }
-
     if (ctxt->vstateNr >= ctxt->vstateMax) {
         xmlValidState *tmp;
+        int newSize;
 
-	tmp = (xmlValidState *) xmlRealloc(ctxt->vstateTab,
-	             2 * ctxt->vstateMax * sizeof(ctxt->vstateTab[0]));
+        newSize = xmlGrowCapacity(ctxt->vstateMax, sizeof(tmp[0]),
+                                          10, XML_MAX_ITEMS);
+        if (newSize < 0) {
+            xmlVErrMemory(ctxt, "Size is less than 0.\n");
+            return(-1);
+        }
+        tmp = xmlRealloc(ctxt->vstateTab, newSize * sizeof(tmp[0]));
         if (tmp == NULL) {
 	    xmlVErrMemory(ctxt, "realloc failed");
 	    return(-1);
 	}
-	ctxt->vstateMax *= 2;
 	ctxt->vstateTab = tmp;
+        ctxt->vstateMax = newSize;
     }
     ctxt->vstate = &ctxt->vstateTab[ctxt->vstateNr];
     ctxt->vstateTab[ctxt->vstateNr].elemDecl = elemDecl;
@@ -378,30 +376,24 @@ vstateVPush(xmlValidCtxtPtr ctxt, xmlElementContentPtr cont,
 	    xmlNodePtr node, unsigned char depth, long occurs,
 	    unsigned char state) {
     int i = ctxt->vstateNr - 1;
-
-    if (ctxt->vstateNr > MAX_RECURSE) {
-	return(-1);
-    }
-    if (ctxt->vstateTab == NULL) {
-	ctxt->vstateMax = 8;
-	ctxt->vstateTab = (xmlValidState *) xmlMalloc(
-		     ctxt->vstateMax * sizeof(ctxt->vstateTab[0]));
-	if (ctxt->vstateTab == NULL) {
-	    xmlVErrMemory(ctxt, "malloc failed");
-	    return(-1);
-	}
-    }
     if (ctxt->vstateNr >= ctxt->vstateMax) {
         xmlValidState *tmp;
+        int newSize;
 
-        tmp = (xmlValidState *) xmlRealloc(ctxt->vstateTab,
-	             2 * ctxt->vstateMax * sizeof(ctxt->vstateTab[0]));
+        newSize = xmlGrowCapacity(ctxt->vstateMax, sizeof(tmp[0]),
+                                  8, MAX_RECURSE);
+        if (newSize < 0) {
+            xmlVErrMemory(ctxt, "Size is less than 0.\n");
+            return(-1);
+        }
+
+        tmp = xmlRealloc(ctxt->vstateTab, newSize * sizeof(tmp[0]));
         if (tmp == NULL) {
-	    xmlVErrMemory(ctxt, "malloc failed");
+	    xmlVErrMemory(ctxt, "Failed to allocate memory.\n");
 	    return(-1);
 	}
-	ctxt->vstateMax *= 2;
 	ctxt->vstateTab = tmp;
+        ctxt->vstateMax = newSize;
 	ctxt->vstate = &ctxt->vstateTab[0];
     }
     /*
@@ -439,27 +431,23 @@ vstateVPop(xmlValidCtxtPtr ctxt) {
 static int
 nodeVPush(xmlValidCtxtPtr ctxt, xmlNodePtr value)
 {
-    if (ctxt->nodeMax <= 0) {
-        ctxt->nodeMax = 4;
-        ctxt->nodeTab =
-            (xmlNodePtr *) xmlMalloc(ctxt->nodeMax *
-                                     sizeof(ctxt->nodeTab[0]));
-        if (ctxt->nodeTab == NULL) {
-	    xmlVErrMemory(ctxt, "malloc failed");
-            ctxt->nodeMax = 0;
-            return (0);
-        }
-    }
     if (ctxt->nodeNr >= ctxt->nodeMax) {
         xmlNodePtr *tmp;
-        tmp = (xmlNodePtr *) xmlRealloc(ctxt->nodeTab,
-			      ctxt->nodeMax * 2 * sizeof(ctxt->nodeTab[0]));
+        int newSize;
+
+        newSize = xmlGrowCapacity(ctxt->nodeMax, sizeof(tmp[0]),
+                                  4, XML_MAX_ITEMS);
+        if (newSize < 0) {
+	    xmlVErrMemory(ctxt, "malloc failed");
+            return (0);
+        }
+        tmp = xmlRealloc(ctxt->nodeTab, newSize * sizeof(tmp[0]));
         if (tmp == NULL) {
 	    xmlVErrMemory(ctxt, "realloc failed");
             return (0);
         }
-        ctxt->nodeMax *= 2;
 	ctxt->nodeTab = tmp;
+        ctxt->nodeMax = newSize;
     }
     ctxt->nodeTab[ctxt->nodeNr] = value;
     ctxt->node = value;
@@ -756,11 +744,13 @@ xmlValidBuildAContentModel(xmlElementContentPtr content,
 		oldstate = ctxt->state;
 	    }
 	    do {
-		xmlValidBuildAContentModel(content->c1, ctxt, name);
+		if (xmlValidBuildAContentModel(content->c1, ctxt, name) == 0)
+                    return(0);
 		content = content->c2;
 	    } while ((content->type == XML_ELEMENT_CONTENT_SEQ) &&
 		     (content->ocur == XML_ELEMENT_CONTENT_ONCE));
-	    xmlValidBuildAContentModel(content, ctxt, name);
+	    if (xmlValidBuildAContentModel(content, ctxt, name) == 0)
+                return(0);
 	    oldend = ctxt->state;
 	    ctxt->state = xmlAutomataNewEpsilon(ctxt->am, oldend, NULL);
 	    switch (ocur) {
@@ -798,13 +788,15 @@ xmlValidBuildAContentModel(xmlElementContentPtr content,
 	     */
 	    do {
 		ctxt->state = oldstate;
-		xmlValidBuildAContentModel(content->c1, ctxt, name);
+		if (xmlValidBuildAContentModel(content->c1, ctxt, name) == 0)
+                    return(0);
 		xmlAutomataNewEpsilon(ctxt->am, ctxt->state, oldend);
 		content = content->c2;
 	    } while ((content->type == XML_ELEMENT_CONTENT_OR) &&
 		     (content->ocur == XML_ELEMENT_CONTENT_ONCE));
 	    ctxt->state = oldstate;
-	    xmlValidBuildAContentModel(content, ctxt, name);
+	    if (xmlValidBuildAContentModel(content, ctxt, name) == 0)
+                return(0);
 	    xmlAutomataNewEpsilon(ctxt->am, ctxt->state, oldend);
 	    ctxt->state = xmlAutomataNewEpsilon(ctxt->am, oldend, NULL);
 	    switch (ocur) {
@@ -868,7 +860,12 @@ xmlValidBuildContentModel(xmlValidCtxtPtr ctxt, xmlElementPtr elem) {
 	return(0);
     }
     ctxt->state = xmlAutomataGetInitState(ctxt->am);
-    xmlValidBuildAContentModel(elem->content, ctxt, elem->name);
+    if (xmlValidBuildAContentModel(elem->content, ctxt, elem->name) == 0) {
+        ctxt->state = NULL;
+        xmlFreeAutomata(ctxt->am);
+        ctxt->am = NULL;
+        return(0);
+    }
     xmlAutomataSetFinalState(ctxt->am, ctxt->state);
     elem->contModel = xmlAutomataCompile(ctxt->am);
     if (xmlRegexpIsDeterminist(elem->contModel) != 1) {
@@ -2796,7 +2793,7 @@ xmlAddID(xmlValidCtxtPtr ctxt, xmlDocPtr doc, const xmlChar *value,
 	return(NULL);
     }
     if (attr != NULL)
-	attr->atype = XML_ATTRIBUTE_ID;
+	XML_ATTR_SET_ATYPE(attr, XML_ATTRIBUTE_ID);
     return(ret);
 }
 
@@ -2916,7 +2913,7 @@ xmlRemoveID(xmlDocPtr doc, xmlAttrPtr attr) {
 
     xmlHashRemoveEntry(table, ID, xmlFreeIDTableEntry);
     xmlFree(ID);
-    attr->atype = 0;
+    XML_ATTR_CLEAR_ATYPE(attr);
     return(0);
 }
 
@@ -3570,7 +3567,7 @@ xmlIsMixedElement(xmlDocPtr doc, const xmlChar *name) {
 
 static int
 xmlIsDocNameStartChar(xmlDocPtr doc, int c) {
-    if ((doc == NULL) || (doc->properties & XML_DOC_OLD10) == 0) {
+    if ((doc == NULL) || (XML_DOC_GET_PROPERTIES(doc) & XML_DOC_OLD10) == 0) {
         /*
 	 * Use the new checks of production [4] [4a] amd [5] of the
 	 * Update 5 of XML-1.0
@@ -3600,7 +3597,7 @@ xmlIsDocNameStartChar(xmlDocPtr doc, int c) {
 
 static int
 xmlIsDocNameChar(xmlDocPtr doc, int c) {
-    if ((doc == NULL) || (doc->properties & XML_DOC_OLD10) == 0) {
+    if ((doc == NULL) || (XML_DOC_GET_PROPERTIES(doc) & XML_DOC_OLD10) == 0) {
         /*
 	 * Use the new checks of production [4] [4a] amd [5] of the
 	 * Update 5 of XML-1.0
@@ -4539,7 +4536,7 @@ xmlValidateOneAttribute(xmlValidCtxtPtr ctxt, xmlDocPtr doc,
 	       attr->name, elem->name, NULL);
 	return(0);
     }
-    attr->atype = attrDecl->atype;
+    XML_ATTR_SET_ATYPE(attr, attrDecl->atype);
 
     val = xmlValidateAttributeValueInternal(doc, attrDecl->atype, value);
     if (val == 0) {
@@ -6649,7 +6646,7 @@ xmlValidateRef(xmlRefPtr ref, xmlValidCtxtPtr ctxt,
 	    while (IS_BLANK_CH(*cur)) cur++;
 	}
 	xmlFree(dup);
-    } else if (attr->atype == XML_ATTRIBUTE_IDREF) {
+    } else if (XML_ATTR_GET_ATYPE(attr) == XML_ATTRIBUTE_IDREF) {
 	id = xmlGetID(ctxt->doc, name);
 	if (id == NULL) {
 	    xmlErrValidNode(ctxt, attr->parent, XML_DTD_UNKNOWN_ID,
@@ -6657,7 +6654,7 @@ xmlValidateRef(xmlRefPtr ref, xmlValidCtxtPtr ctxt,
 		   attr->name, name, NULL);
 	    ctxt->valid = 0;
 	}
-    } else if (attr->atype == XML_ATTRIBUTE_IDREFS) {
+    } else if (XML_ATTR_GET_ATYPE(attr) == XML_ATTRIBUTE_IDREFS) {
 	xmlChar *dup, *str = NULL, *cur, save;
 
 	dup = xmlStrdup(name);

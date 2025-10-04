@@ -28,6 +28,8 @@
 #include <libxml/xinclude.h>
 
 #include "buf.h"
+#include "private/memory.h"
+#include "private/parser.h"
 
 #define XINCLUDE_MAX_DEPTH 40
 
@@ -262,15 +264,26 @@ xmlXIncludeNewRef(xmlXIncludeCtxtPtr ctxt, const xmlChar *URI,
 	    return(NULL);
 	}
     }
+
     if (ctxt->incNr >= ctxt->incMax) {
-	ctxt->incMax *= 2;
-        ctxt->incTab = (xmlXIncludeRefPtr *) xmlRealloc(ctxt->incTab,
-	             ctxt->incMax * sizeof(ctxt->incTab[0]));
-        if (ctxt->incTab == NULL) {
+        xmlXIncludeRefPtr *table;
+        int newSize;
+
+        newSize = xmlGrowCapacity(ctxt->incMax, sizeof(table[0]),
+                                  4, XML_MAX_ITEMS);
+        if (newSize < 0) {
 	    xmlXIncludeErrMemory(ctxt, ref, "growing XInclude context");
 	    xmlXIncludeFreeRef(ret);
 	    return(NULL);
 	}
+        table = xmlRealloc(ctxt->incTab, newSize * sizeof(table[0]));
+        if (table == NULL) {
+	    xmlXIncludeErrMemory(ctxt, ref, "growing XInclude context");
+	    xmlXIncludeFreeRef(ret);
+	    return(NULL);
+	}
+        ctxt->incTab = table;
+        ctxt->incMax = newSize;
     }
     ctxt->incTab[ctxt->incNr++] = ret;
     return(ret);
@@ -338,15 +351,22 @@ xmlXIncludeURLPush(xmlXIncludeCtxtPtr ctxt,
         }
     }
     if (ctxt->urlNr >= ctxt->urlMax) {
-        ctxt->urlMax *= 2;
-        ctxt->urlTab =
-            (xmlChar * *) xmlRealloc(ctxt->urlTab,
-                                      ctxt->urlMax *
-                                      sizeof(ctxt->urlTab[0]));
-        if (ctxt->urlTab == NULL) {
-	    xmlXIncludeErrMemory(ctxt, NULL, "adding URL");
+        xmlChar **tmp;
+        int newSize;
+
+        newSize = xmlGrowCapacity(ctxt->urlMax, sizeof(tmp[0]),
+                                  8, XML_MAX_ITEMS);
+        if (newSize < 0) {
+            xmlXIncludeErrMemory(ctxt, NULL, "adding URL");
             return (-1);
         }
+        tmp = xmlRealloc(ctxt->urlTab, newSize * sizeof(tmp[0]));
+        if (tmp == NULL) {
+            xmlXIncludeErrMemory(ctxt, NULL, "adding URL");
+            return (-1);
+        }
+        ctxt->urlMax = newSize;
+        ctxt->urlTab = tmp;
     }
     ctxt->url = ctxt->urlTab[ctxt->urlNr] = xmlStrdup(value);
     return (ctxt->urlNr++);
@@ -470,7 +490,13 @@ xmlXIncludeParseFile(xmlXIncludeCtxtPtr ctxt, const char *URL) {
 	return(NULL);
     }
 
-    inputPush(pctxt, inputStream);
+    if (inputPush(pctxt, inputStream) < 0) {
+        xmlFreeInputStream(inputStream);
+        if (pctxt->errNo == XML_ERR_NO_MEMORY)
+            xmlXIncludeErrMemory(ctxt, NULL, "cannot push input stream");
+        xmlFreeParserCtxt(pctxt);
+        return(NULL);
+    }
 
     if (pctxt->directory == NULL)
         pctxt->directory = xmlParserGetDirectory(URL);
@@ -531,6 +557,13 @@ xmlXIncludeAddNode(xmlXIncludeCtxtPtr ctxt, xmlNodePtr cur) {
 	if (href == NULL)
 	    return(-1);
     }
+    if (xmlStrlen(href) > XML_MAX_URI_LENGTH) {
+            xmlXIncludeErr(ctxt, cur, XML_XINCLUDE_HREF_URI, "URI too long\n",
+                           NULL);
+            xmlFree(href);
+            return(-1);
+    }
+
     if ((href[0] == '#') || (href[0] == 0))
 	local = 1;
     parse = xmlXIncludeGetProp(ctxt, cur, XINCLUDE_PARSE);
@@ -796,20 +829,33 @@ xmlXIncludeAddTxt(xmlXIncludeCtxtPtr ctxt, const xmlChar *txt,
 	}
     }
     if (ctxt->txtNr >= ctxt->txtMax) {
-	ctxt->txtMax *= 2;
-        ctxt->txtTab = (xmlChar **) xmlRealloc(ctxt->txtTab,
-	             ctxt->txtMax * sizeof(ctxt->txtTab[0]));
-        if (ctxt->txtTab == NULL) {
-	    xmlXIncludeErrMemory(ctxt, NULL, "processing text");
+        xmlChar **tmp;
+        xmlURL *tmp2;
+        int newSize;
+
+        newSize = xmlGrowCapacity(ctxt->txtMax, sizeof(tmp[0]),
+                                  8, XML_MAX_ITEMS);
+        if (newSize < 0) {
+            xmlXIncludeErrMemory(ctxt, NULL, "processing text");
 	    return;
-	}
-        ctxt->txturlTab = (xmlURL *) xmlRealloc(ctxt->txturlTab,
-	             ctxt->txtMax * sizeof(ctxt->txturlTab[0]));
-        if (ctxt->txturlTab == NULL) {
-	    xmlXIncludeErrMemory(ctxt, NULL, "processing text");
+        }
+
+        tmp = xmlRealloc(ctxt->txtTab, newSize * sizeof(tmp[0]));
+        if (tmp == NULL) {
+            xmlXIncludeErrMemory(ctxt, NULL, "processing text");
 	    return;
+        }
+
+        tmp2 = xmlRealloc(ctxt->txturlTab, newSize * sizeof(tmp2[0]));
+        if (tmp2 == NULL) {
+            xmlXIncludeErrMemory(ctxt, NULL, "processing text");
+	    return;
+        }
+
+        ctxt->txtMax = newSize;
+        ctxt->txtTab = tmp;
+        ctxt->txturlTab = tmp2;
 	}
-    }
     ctxt->txtTab[ctxt->txtNr] = xmlStrdup(txt);
     ctxt->txturlTab[ctxt->txtNr] = xmlStrdup(url);
     ctxt->txtNr++;
@@ -1378,8 +1424,10 @@ xmlXIncludeMergeEntities(xmlXIncludeCtxtPtr ctxt, xmlDocPtr doc,
 	if (cur == NULL)
 	    return(-1);
         target = xmlCreateIntSubset(doc, cur->name, NULL, NULL);
-	if (target == NULL)
-	    return(-1);
+        if (target == NULL) {
+            xmlXIncludeErrMemory(ctxt, NULL, "creating int subset");
+            return(-1);
+        }
     }
 
     source = from->intSubset;
@@ -2230,12 +2278,17 @@ xmlXIncludeIncludeNode(xmlXIncludeCtxtPtr ctxt, int nr) {
 		nb_elem++;
 	    tmp = tmp->next;
 	}
-	if (nb_elem > 1) {
-	    xmlXIncludeErr(ctxt, ctxt->incTab[nr]->ref,
-	                   XML_XINCLUDE_MULTIPLE_ROOT,
-		       "XInclude error: would result in multiple root nodes\n",
-			   NULL);
-            xmlFreeNodeList(list);
+    if (nb_elem != 1) {
+        if (nb_elem > 1) {
+            xmlXIncludeErr(ctxt, ctxt->incTab[nr]->ref, XML_XINCLUDE_MULTIPLE_ROOT,
+                            "XInclude error: would result in multiple root "
+                            "nodes\n", NULL);
+        } else {
+            xmlXIncludeErr(ctxt, ctxt->incTab[nr]->ref, XML_XINCLUDE_MULTIPLE_ROOT,
+                            "XInclude error: would result in no root "
+                            "node\n", NULL);
+        }
+	    xmlFreeNodeList(list);
 	    return(-1);
 	}
     }

@@ -45,6 +45,7 @@
 #endif
 
 #include "buf.h"
+#include "private/memory.h"
 
 #define MAX_ERR_MSG_SIZE 64000
 
@@ -227,6 +228,13 @@ static int xmlTextReaderNextTree(xmlTextReaderPtr reader);
 
 static void xmlTextReaderFreeNode(xmlTextReaderPtr reader, xmlNodePtr cur);
 static void xmlTextReaderFreeNodeList(xmlTextReaderPtr reader, xmlNodePtr cur);
+
+static void
+xmlTextReaderErrMemory(xmlTextReaderPtr reader) {
+    xmlErrMemory(reader->ctxt, NULL);
+    reader->mode = XML_TEXTREADER_MODE_ERROR;
+    reader->state = XML_TEXTREADER_ERROR;
+}
 
 /**
  * xmlFreeID:
@@ -676,30 +684,28 @@ xmlTextReaderDebug(xmlTextReaderPtr reader) {
  *
  * Pushes a new entity reference node on top of the entities stack
  *
- * Returns 0 in case of error, the index in the stack otherwise
+ * Returns -1 in case of error, the index in the stack otherwise
  */
 static int
 xmlTextReaderEntPush(xmlTextReaderPtr reader, xmlNodePtr value)
 {
-    if (reader->entMax <= 0) {
-	reader->entMax = 10;
-	reader->entTab = (xmlNodePtr *) xmlMalloc(reader->entMax *
-		                                  sizeof(reader->entTab[0]));
-        if (reader->entTab == NULL) {
-            xmlGenericError(xmlGenericErrorContext, "xmlMalloc failed !\n");
-            return (0);
-        }
-    }
     if (reader->entNr >= reader->entMax) {
-        reader->entMax *= 2;
-        reader->entTab =
-            (xmlNodePtr *) xmlRealloc(reader->entTab,
-                                      reader->entMax *
-                                      sizeof(reader->entTab[0]));
-        if (reader->entTab == NULL) {
+        xmlNodePtr *tmp;
+        int newSize;
+
+        newSize = xmlGrowCapacity(reader->entMax, sizeof(tmp[0]),
+                                  10, XML_MAX_ITEMS);
+        if (newSize < 0) {
             xmlGenericError(xmlGenericErrorContext, "xmlRealloc failed !\n");
-            return (0);
+            return (-1);
         }
+        tmp = xmlRealloc(reader->entTab, newSize * sizeof(tmp[0]));
+        if (tmp == NULL) {
+            xmlGenericError(xmlGenericErrorContext, "xmlRealloc failed !\n");
+            return (-1);
+        }
+        reader->entTab = tmp;
+        reader->entMax = newSize;
     }
     reader->entTab[reader->entNr] = value;
     reader->ent = value;
@@ -753,7 +759,7 @@ xmlTextReaderStartElement(void *ctx, const xmlChar *fullname,
 	if ((ctxt->node != NULL) && (ctxt->input != NULL) &&
 	    (ctxt->input->cur != NULL) && (ctxt->input->cur[0] == '/') &&
 	    (ctxt->input->cur[1] == '>'))
-	    ctxt->node->extra = NODE_IS_EMPTY;
+	    XML_NODE_SET_EXTRA(ctxt->node, NODE_IS_EMPTY);
     }
     if (reader != NULL)
 	reader->state = XML_TEXTREADER_ELEMENT;
@@ -818,7 +824,7 @@ xmlTextReaderStartElementNs(void *ctx,
 	if ((ctxt->node != NULL) && (ctxt->input != NULL) &&
 	    (ctxt->input->cur != NULL) && (ctxt->input->cur[0] == '/') &&
 	    (ctxt->input->cur[1] == '>'))
-	    ctxt->node->extra = NODE_IS_EMPTY;
+	    XML_NODE_SET_EXTRA(ctxt->node, NODE_IS_EMPTY);
     }
     if (reader != NULL)
 	reader->state = XML_TEXTREADER_ELEMENT;
@@ -1172,7 +1178,11 @@ xmlTextReaderValidateEntity(xmlTextReaderPtr reader) {
 	    if ((node->children != NULL) &&
 		(node->children->type == XML_ENTITY_DECL) &&
 		(node->children->children != NULL)) {
-		xmlTextReaderEntPush(reader, node);
+		if (xmlTextReaderEntPush(reader, node) < 0) {
+                    if (node == oldnode)
+                        break;
+                    goto skip_children;
+                }
 		node = node->children->children;
 		continue;
 	    } else {
@@ -1214,7 +1224,7 @@ skip_children:
 	        xmlNodePtr tmp;
 		if (reader->entNr == 0) {
 		    while ((tmp = node->last) != NULL) {
-			if ((tmp->extra & NODE_IS_PRESERVED) == 0) {
+			if ((XML_NODE_GET_EXTRA(tmp) & NODE_IS_PRESERVED) == 0) {
 			    xmlUnlinkNode(tmp);
 			    xmlTextReaderFreeNode(reader, tmp);
 			} else
@@ -1294,53 +1304,6 @@ xmlTextReaderDoExpand(xmlTextReaderPtr reader) {
 	}
     } while(reader->mode != XML_TEXTREADER_MODE_EOF);
     return(1);
-}
-
-/**
- * xmlTextReaderCollectSiblings:
- * @node:    the first child
- *
- *  Traverse depth-first through all sibling nodes and their children
- *  nodes and concatenate their content. This is an auxiliary function
- *  to xmlTextReaderReadString.
- *
- *  Returns a string containing the content, or NULL in case of error.
- */
-static xmlChar *
-xmlTextReaderCollectSiblings(xmlNodePtr node)
-{
-    xmlBufferPtr buffer;
-    xmlChar *ret;
-
-    if ((node == NULL) || (node->type == XML_NAMESPACE_DECL))
-        return(NULL);
-
-    buffer = xmlBufferCreate();
-    if (buffer == NULL)
-       return NULL;
-
-    for ( ; node != NULL; node = node->next) {
-       switch (node->type) {
-       case XML_TEXT_NODE:
-       case XML_CDATA_SECTION_NODE:
-           xmlBufferCat(buffer, node->content);
-           break;
-       case XML_ELEMENT_NODE: {
-           xmlChar *tmp;
-
-	   tmp = xmlTextReaderCollectSiblings(node->children);
-           xmlBufferCat(buffer, tmp);
-	   xmlFree(tmp);
-	   break;
-       }
-       default:
-           break;
-       }
-    }
-    ret = buffer->content;
-    buffer->content = NULL;
-    xmlBufferFree(buffer);
-    return(ret);
 }
 
 /**
@@ -1465,7 +1428,7 @@ get_next_node:
 	if ((oldstate == XML_TEXTREADER_ELEMENT) &&
             (reader->node->type == XML_ELEMENT_NODE) &&
 	    (reader->node->children == NULL) &&
-	    ((reader->node->extra & NODE_IS_EMPTY) == 0)
+	    ((XML_NODE_GET_EXTRA(reader->node) & NODE_IS_EMPTY) == 0)
 #ifdef LIBXML_XINCLUDE_ENABLED
 	    && (reader->in_xinclude <= 0)
 #endif
@@ -1479,7 +1442,7 @@ get_next_node:
 	    xmlTextReaderValidatePop(reader);
 #endif /* LIBXML_REGEXP_ENABLED */
         if ((reader->preserves > 0) &&
-	    (reader->node->extra & NODE_IS_SPRESERVED))
+	    (XML_NODE_GET_EXTRA(reader->node) & NODE_IS_SPRESERVED))
 	    reader->preserves--;
 	reader->node = reader->node->next;
 	reader->state = XML_TEXTREADER_ELEMENT;
@@ -1495,7 +1458,7 @@ get_next_node:
 	    (reader->node->prev != NULL) &&
             (reader->node->prev->type != XML_DTD_NODE)) {
 	    xmlNodePtr tmp = reader->node->prev;
-	    if ((tmp->extra & NODE_IS_PRESERVED) == 0) {
+	    if ((XML_NODE_GET_EXTRA(tmp) & NODE_IS_PRESERVED) == 0) {
                 if (oldnode == tmp)
                     oldnode = NULL;
 		xmlUnlinkNode(tmp);
@@ -1508,7 +1471,7 @@ get_next_node:
     if ((oldstate == XML_TEXTREADER_ELEMENT) &&
 	(reader->node->type == XML_ELEMENT_NODE) &&
 	(reader->node->children == NULL) &&
-	((reader->node->extra & NODE_IS_EMPTY) == 0)) {;
+	((XML_NODE_GET_EXTRA(reader->node) & NODE_IS_EMPTY) == 0)) {;
 	reader->state = XML_TEXTREADER_END;
 	goto node_found;
     }
@@ -1517,7 +1480,7 @@ get_next_node:
 	xmlTextReaderValidatePop(reader);
 #endif /* LIBXML_REGEXP_ENABLED */
     if ((reader->preserves > 0) &&
-	(reader->node->extra & NODE_IS_SPRESERVED))
+	(XML_NODE_GET_EXTRA(reader->node) & NODE_IS_SPRESERVED))
 	reader->preserves--;
     reader->node = reader->node->parent;
     if ((reader->node == NULL) ||
@@ -1544,7 +1507,7 @@ get_next_node:
 #endif
 	    (reader->entNr == 0) &&
 	    (oldnode->type != XML_DTD_NODE) &&
-	    ((oldnode->extra & NODE_IS_PRESERVED) == 0)) {
+	    ((XML_NODE_GET_EXTRA(oldnode) & NODE_IS_PRESERVED) == 0)) {
 	    xmlUnlinkNode(oldnode);
 	    xmlTextReaderFreeNode(reader, oldnode);
 	}
@@ -1557,7 +1520,7 @@ get_next_node:
 #endif
 	(reader->entNr == 0) &&
         (reader->node->last != NULL) &&
-        ((reader->node->last->extra & NODE_IS_PRESERVED) == 0)) {
+        ((XML_NODE_GET_EXTRA(reader->node->last) & NODE_IS_PRESERVED) == 0)) {
 	xmlNodePtr tmp = reader->node->last;
 	xmlUnlinkNode(tmp);
 	xmlTextReaderFreeNode(reader, tmp);
@@ -1620,7 +1583,8 @@ node_found:
 	if ((reader->node->children != NULL) &&
 	    (reader->node->children->type == XML_ENTITY_DECL) &&
 	    (reader->node->children->children != NULL)) {
-	    xmlTextReaderEntPush(reader, reader->node);
+	    if (xmlTextReaderEntPush(reader, reader->node) < 0)
+                goto get_next_node;
 	    reader->node = reader->node->children->children;
 	}
 #ifdef LIBXML_REGEXP_ENABLED
@@ -1739,7 +1703,7 @@ xmlTextReaderNext(xmlTextReaderPtr reader) {
         return(xmlTextReaderRead(reader));
     if (reader->state == XML_TEXTREADER_END || reader->state == XML_TEXTREADER_BACKTRACK)
         return(xmlTextReaderRead(reader));
-    if (cur->extra & NODE_IS_EMPTY)
+    if (XML_NODE_GET_EXTRA(cur) & NODE_IS_EMPTY)
         return(xmlTextReaderRead(reader));
     do {
         ret = xmlTextReaderRead(reader);
@@ -1850,36 +1814,79 @@ xmlTextReaderReadOuterXml(xmlTextReaderPtr reader ATTRIBUTE_UNUSED)
  *
  * Reads the contents of an element or a text node as a string.
  *
- * Returns a string containing the contents of the Element or Text node,
- *         or NULL if the reader is positioned on any other type of node.
+ * Returns a string containing the contents of the non-empty Element or
+ *         Text node (including CDATA sections), or NULL if the reader
+ *         is positioned on any other type of node.
  *         The string must be deallocated by the caller.
  */
 xmlChar *
 xmlTextReaderReadString(xmlTextReaderPtr reader)
 {
-    xmlNodePtr node;
+    xmlNodePtr node, cur;
+    xmlBufPtr buf;
+    xmlChar *ret;
 
     if ((reader == NULL) || (reader->node == NULL))
        return(NULL);
 
     node = (reader->curnode != NULL) ? reader->curnode : reader->node;
     switch (node->type) {
-    case XML_TEXT_NODE:
-       if (node->content != NULL)
-           return(xmlStrdup(node->content));
-       break;
-    case XML_ELEMENT_NODE:
-	if (xmlTextReaderDoExpand(reader) != -1) {
-	    return xmlTextReaderCollectSiblings(node->children);
-	}
-	break;
-    case XML_ATTRIBUTE_NODE:
-	TODO
-	break;
-    default:
-       break;
+        case XML_TEXT_NODE:
+        case XML_CDATA_SECTION_NODE:
+            break;
+        case XML_ELEMENT_NODE:
+            if ((xmlTextReaderDoExpand(reader) == -1) ||
+                (node->children == NULL))
+                return(NULL);
+            break;
+        default:
+            return(NULL);
     }
-    return(NULL);
+
+    buf = xmlBufCreateSize(30);
+    if (buf == NULL) {
+        xmlTextReaderErrMemory(reader);
+        return(NULL);
+    }
+    xmlBufSetAllocationScheme(buf, XML_BUFFER_ALLOC_DOUBLEIT);
+
+    cur = node;
+    while (cur != NULL) {
+        switch (cur->type) {
+            case XML_TEXT_NODE:
+            case XML_CDATA_SECTION_NODE:
+                xmlBufCat(buf, cur->content);
+                break;
+
+            case XML_ELEMENT_NODE:
+                if (cur->children != NULL) {
+                    cur = cur->children;
+                    continue;
+                }
+                break;
+
+            default:
+                break;
+        }
+
+        if (cur == node)
+            goto done;
+
+        while (cur->next == NULL) {
+            cur = cur->parent;
+            if (cur == node)
+                goto done;
+        }
+        cur = cur->next;
+    }
+
+done:
+    ret = xmlBufDetach(buf);
+    if (ret == NULL)
+        xmlTextReaderErrMemory(reader);
+
+    xmlBufFree(buf);
+    return(ret);
 }
 
 #if 0
@@ -3161,7 +3168,7 @@ xmlTextReaderIsEmptyElement(xmlTextReaderPtr reader) {
     if (reader->in_xinclude > 0)
         return(1);
 #endif
-    return((reader->node->extra & NODE_IS_EMPTY) != 0);
+    return((XML_NODE_GET_EXTRA(reader->node) & NODE_IS_EMPTY) != 0);
 }
 
 /**
@@ -4029,15 +4036,15 @@ xmlTextReaderPreserve(xmlTextReaderPtr reader) {
         return(NULL);
 
     if ((cur->type != XML_DOCUMENT_NODE) && (cur->type != XML_DTD_NODE)) {
-	cur->extra |= NODE_IS_PRESERVED;
-	cur->extra |= NODE_IS_SPRESERVED;
+	XML_NODE_ADD_EXTRA(cur, NODE_IS_PRESERVED);
+	XML_NODE_ADD_EXTRA(cur, NODE_IS_SPRESERVED);
     }
     reader->preserves++;
 
     parent = cur->parent;;
     while (parent != NULL) {
         if (parent->type == XML_ELEMENT_NODE)
-	    parent->extra |= NODE_IS_PRESERVED;
+	    XML_NODE_ADD_EXTRA(parent, NODE_IS_PRESERVED);
 	parent = parent->parent;
     }
     return(cur);
@@ -4069,27 +4076,23 @@ xmlTextReaderPreservePattern(xmlTextReaderPtr reader, const xmlChar *pattern,
     if (comp == NULL)
         return(-1);
 
-    if (reader->patternMax <= 0) {
-	reader->patternMax = 4;
-	reader->patternTab = (xmlPatternPtr *) xmlMalloc(reader->patternMax *
-					      sizeof(reader->patternTab[0]));
-        if (reader->patternTab == NULL) {
-            xmlGenericError(xmlGenericErrorContext, "xmlMalloc failed !\n");
-            return (-1);
-        }
-    }
     if (reader->patternNr >= reader->patternMax) {
         xmlPatternPtr *tmp;
-        reader->patternMax *= 2;
-	tmp = (xmlPatternPtr *) xmlRealloc(reader->patternTab,
-                                      reader->patternMax *
-                                      sizeof(reader->patternTab[0]));
+        int newSize;
+
+        newSize = xmlGrowCapacity(reader->patternMax, sizeof(tmp[0]),
+                                  4, XML_MAX_ITEMS);
+        if (newSize < 0) {
+            xmlGenericError(xmlGenericErrorContext, "xmlRealloc failed !\n");
+            return(-1);
+        }
+	tmp = xmlRealloc(reader->patternTab, newSize * sizeof(tmp[0]));
         if (tmp == NULL) {
             xmlGenericError(xmlGenericErrorContext, "xmlRealloc failed !\n");
-	    reader->patternMax /= 2;
             return (-1);
         }
 	reader->patternTab = tmp;
+	reader->patternMax = newSize;
     }
     reader->patternTab[reader->patternNr] = comp;
     return(reader->patternNr++);
@@ -5300,7 +5303,10 @@ xmlTextReaderSetup(xmlTextReaderPtr reader,
 	    inputStream->buf = buf;
             xmlBufResetInput(buf->buffer, inputStream);
 
-	    inputPush(reader->ctxt, inputStream);
+        if (inputPush(reader->ctxt, inputStream) < 0) {
+            xmlFreeInputStream(inputStream);
+            return(-1);
+        }
 	    reader->cur = 0;
 	}
         if (reader->ctxt == NULL) {
